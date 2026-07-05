@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 interface ComboState {
   active: boolean;
@@ -53,6 +54,7 @@ export default function OverlayCombo() {
 
   const minCombo     = Number(p.get("min") ?? "2");
   const tapThreshold = Number(p.get("tap") ?? "30"); // likes in burst
+  const isDemo       = p.get("demo") === "1";
 
   const [combo, setCombo]   = useState<ComboState | null>(null);
   const [show, setShow]     = useState(false);
@@ -73,8 +75,66 @@ export default function OverlayCombo() {
     hideTimer.current = setTimeout(() => setShow(false), 3200);
   }, []);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    // Gift streak detection
+    if (data.type === "gift") {
+      const d = data as {
+        giftName?: string; repeatCount?: number;
+        giftType?: number; diamondCount?: number;
+      };
+      const name = d.giftName ?? "Gift";
+      const count = d.repeatCount ?? 1;
+      const visuals = getGiftVisuals(name);
+
+      if (d.giftType === 1) {
+        const existing = giftStreaks.current.get(name);
+        if (existing) clearTimeout(existing.timer);
+        const prevPeak = giftPeak.current.get(name) ?? 0;
+        giftPeak.current.set(name, count);
+        const newCount = (existing?.count ?? 0) + Math.max(0, count - prevPeak);
+        const timer = setTimeout(() => { giftStreaks.current.delete(name); giftPeak.current.delete(name); }, 2000);
+        giftStreaks.current.set(name, { count: newCount, timer });
+
+        if (newCount >= minCombo) {
+          showCombo({
+            giftName: name, emoji: visuals.emoji,
+            color: visuals.color, count: newCount,
+            label: comboLabel(newCount), kind: "gift",
+          });
+        }
+      } else {
+        giftStreaks.current.delete(name);
+        if (count >= minCombo) {
+          showCombo({
+            giftName: name, emoji: visuals.emoji,
+            color: visuals.color, count,
+            label: comboLabel(count), kind: "gift",
+          });
+        }
+      }
+    }
+
+    // Tap-tap: rapid likes burst
+    if (data.type === "like") {
+      likeCount.current++;
+      if (likeTimer.current) clearTimeout(likeTimer.current);
+      likeTimer.current = setTimeout(() => {
+        if (likeCount.current >= tapThreshold) {
+          showCombo({
+            giftName: "Tap Tap", emoji: "👆",
+            color: "#ff6b6b", count: likeCount.current,
+            label: "TAP TAP!", kind: "tap",
+          });
+        }
+        likeCount.current = 0;
+      }, 1500);
+    }
+  }, [minCombo, tapThreshold, showCombo]);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 600 });
+
   useEffect(() => {
-    if (!username) return;
+    if (!username || isDemo) return;
     let destroyed = false;
 
     async function connect() {
@@ -99,64 +159,7 @@ export default function OverlayCombo() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-
-            // Gift streak detection
-            if (data.type === "gift") {
-              const d = data as {
-                giftName?: string; repeatCount?: number;
-                giftType?: number; diamondCount?: number;
-              };
-              const name = d.giftName ?? "Gift";
-              const count = d.repeatCount ?? 1;
-              const visuals = getGiftVisuals(name);
-
-              // giftType 1 = streakable (still tapping) — repeatCount is CUMULATIVE from tik.tools
-              // use the latest value directly (peak), not sum, to avoid double-counting
-              if (d.giftType === 1) {
-                const existing = giftStreaks.current.get(name);
-                if (existing) clearTimeout(existing.timer);
-                const prevPeak = giftPeak.current.get(name) ?? 0;
-                giftPeak.current.set(name, count);
-                const newCount = (existing?.count ?? 0) + Math.max(0, count - prevPeak);
-                const timer = setTimeout(() => { giftStreaks.current.delete(name); giftPeak.current.delete(name); }, 2000);
-                giftStreaks.current.set(name, { count: newCount, timer });
-
-                if (newCount >= minCombo) {
-                  showCombo({
-                    giftName: name, emoji: visuals.emoji,
-                    color: visuals.color, count: newCount,
-                    label: comboLabel(newCount), kind: "gift",
-                  });
-                }
-              } else {
-                // Finalized gift
-                giftStreaks.current.delete(name);
-                if (count >= minCombo) {
-                  showCombo({
-                    giftName: name, emoji: visuals.emoji,
-                    color: visuals.color, count,
-                    label: comboLabel(count), kind: "gift",
-                  });
-                }
-              }
-            }
-
-            // Tap-tap: rapid likes burst
-            if (data.type === "like") {
-              likeCount.current++;
-              if (likeTimer.current) clearTimeout(likeTimer.current);
-              likeTimer.current = setTimeout(() => {
-                if (likeCount.current >= tapThreshold) {
-                  showCombo({
-                    giftName: "Tap Tap", emoji: "👆",
-                    color: "#ff6b6b", count: likeCount.current,
-                    label: "TAP TAP!", kind: "tap",
-                  });
-                }
-                likeCount.current = 0;
-              }, 1500);
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch { /* ignore */ }
@@ -168,13 +171,12 @@ export default function OverlayCombo() {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       if (likeTimer.current) clearTimeout(likeTimer.current);
       if (hideTimer.current) clearTimeout(hideTimer.current);
-      // clear all streak timers
       giftStreaks.current.forEach((v) => clearTimeout(v.timer));
       giftStreaks.current.clear();
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [username, minCombo, tapThreshold, showCombo]);
+  }, [username, isDemo, processMessage]);
 
   if (!combo) return null;
 

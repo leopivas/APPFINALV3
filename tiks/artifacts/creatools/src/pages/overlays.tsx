@@ -1,771 +1,636 @@
 /**
- * /overlays — Painel central de overlays para OBS / TikTok Studio / Streamlabs
- * Semelhante ao tikfinity: cada overlay tem URL copiável e preview.
+ * /overlays — Overlay Studio
+ * Editor visual completo com preview ao vivo em canvas vertical (9:16) ou horizontal (16:9).
+ * Modo demo dispara eventos falsos para você ver o overlay funcionando sem estar em live.
  */
-import { useState, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/context/auth-context";
 import {
   Monitor, Copy, CheckCircle2, ExternalLink,
-  Trophy, Zap, BarChart2, Target, Gamepad2, Gift,
-  ChevronDown, ChevronRight, Eye, Info, Star, MessageSquare, Ticket, Sparkles,
+  Trophy, Zap, BarChart2, Target, Gamepad2,
+  Eye, Info, Star, MessageSquare, Ticket,
+  Smartphone, Tv, Play, Pause, RotateCcw, Sparkles,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
-function CopyBtn({ value }: { value: string }) {
+// ─────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────
+
+type OverlayId =
+  | "alerts" | "combo" | "topGifters" | "stats" | "goal"
+  | "subscribe" | "chat" | "ticker" | "basic";
+
+interface OverlayDef {
+  id: OverlayId;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+  path: string; // /overlay/alerts, /overlay/combo, etc.
+  desc: string;
+}
+
+const OVERLAYS: OverlayDef[] = [
+  { id: "alerts",     label: "Alertas",       icon: Zap,           color: "from-orange-500 to-red-600",   path: "alerts",      desc: "Gifts, follows, tap-tap, subs animados." },
+  { id: "combo",      label: "Combos",        icon: Gamepad2,      color: "from-pink-500 to-purple-600",  path: "combo",       desc: "2x, 3x, LUVA! na tela cheia." },
+  { id: "topGifters", label: "Top Gifters",   icon: Trophy,        color: "from-yellow-500 to-amber-600", path: "top-gifters", desc: "Placar dos maiores doadores." },
+  { id: "stats",      label: "Stats Bar",     icon: BarChart2,     color: "from-cyan-500 to-blue-600",    path: "stats",       desc: "Viewers, likes, followers, diamonds." },
+  { id: "goal",       label: "Meta",          icon: Target,        color: "from-emerald-500 to-teal-600", path: "goal",        desc: "Barra de progresso animada." },
+  { id: "subscribe",  label: "Membros",       icon: Star,          color: "from-violet-500 to-indigo-600",path: "subscribe",   desc: "Alerta de novos membros / subs." },
+  { id: "chat",       label: "Chat Wall",     icon: MessageSquare, color: "from-blue-500 to-cyan-600",    path: "chat",        desc: "Feed limpo só com chat." },
+  { id: "ticker",     label: "Gift Ticker",   icon: Ticket,        color: "from-amber-500 to-orange-600", path: "ticker",      desc: "Faixa rolante de gifts." },
+  { id: "basic",      label: "Chat+Eventos",  icon: Monitor,       color: "from-violet-500 to-fuchsia-600", path: "",         desc: "Overlay clássico completo." },
+];
+
+// Per-overlay setting state shape
+type Settings = Record<string, string | number | boolean>;
+
+const DEFAULT_SETTINGS: Record<OverlayId, Settings> = {
+  alerts:     { gifts: true, follows: true, likes: false, subs: true, joins: false, pos: "top-center", min: 0 },
+  combo:      { min: 2, tap: 30 },
+  topGifters: { max: 5, diamonds: true, compact: false, title: "Top Gifters" },
+  stats:      { layout: "horizontal", viewers: true, likes: true, followers: true, diamonds: true, badge: true },
+  goal:       { goal: 1000, mode: "diamonds", label: "", color: "#06b6d4" },
+  subscribe:  { pos: "top-right" },
+  chat:       { max: 8, pos: "bottom-left", bg: 50, size: "md" },
+  ticker:     { pos: "bottom", min: 0, speed: 40 },
+  basic:      { chat: true, gifts: true, follows: true, stats: true, bg: 0, size: "md" },
+};
+
+function buildQueryString(settings: Settings, defaults: Settings, extra: Record<string, string> = {}): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(settings)) {
+    if (v === defaults[k]) continue;
+    if (typeof v === "boolean") p.set(k, v ? "1" : "0");
+    else p.set(k, String(v));
+  }
+  for (const [k, v] of Object.entries(extra)) p.set(k, v);
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
+function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
-  function copy() {
-    void navigator.clipboard.writeText(value);
-    setCopied(true);
-    toast({ title: "Copiado!", description: "URL copiada para a área de transferência." });
-    setTimeout(() => setCopied(false), 2000);
-  }
   return (
-    <Button variant="outline" size="sm" onClick={copy} className="shrink-0 gap-1.5">
+    <Button
+      variant="outline" size="sm"
+      className="gap-1.5 shrink-0"
+      onClick={() => {
+        void navigator.clipboard.writeText(value);
+        setCopied(true);
+        toast({ title: "Copiado!", description: "URL copiada." });
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      data-testid="copy-url-btn"
+    >
       {copied ? <CheckCircle2 className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
       {copied ? "Copiado!" : "Copiar URL"}
     </Button>
   );
 }
 
-function UrlBox({ url, label }: { url: string; label?: string }) {
+// ─────────────────────────────────────────────────────────────────
+// Setting Controls (per overlay)
+// ─────────────────────────────────────────────────────────────────
+
+function SettingLabel({ children }: { children: React.ReactNode }) {
+  return <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{children}</Label>;
+}
+
+function ToggleField({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-      {label && <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{label}</p>}
-      <div className="flex items-center gap-2">
-        <code className="flex-1 text-xs font-mono text-primary/80 break-all leading-relaxed">{url}</code>
-        <div className="flex gap-1.5 shrink-0">
-          <CopyBtn value={url} />
-          <Button variant="ghost" size="sm" asChild className="gap-1 px-2">
-            <a href={url} target="_blank" rel="noopener noreferrer">
-              <Eye className="w-3.5 h-3.5" />
-            </a>
-          </Button>
-        </div>
-      </div>
+    <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/40 border border-border">
+      <Label className="text-sm cursor-pointer">{label}</Label>
+      <Switch checked={value} onCheckedChange={onChange} />
     </div>
   );
 }
 
-function SectionHeader({ icon: Icon, title, desc, color }: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string; desc: string; color: string;
+function SliderField({ label, unit, value, onChange, min = 0, max = 100, step = 1 }: {
+  label: string; unit?: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number;
 }) {
   return (
-    <div className="flex items-start gap-3 mb-5">
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-lg ${color}`}>
-        <Icon className="w-5 h-5 text-white" />
+    <div className="space-y-1.5">
+      <div className="flex justify-between">
+        <Label className="text-sm">{label}</Label>
+        <span className="text-xs font-mono text-primary">{value}{unit ?? ""}</span>
       </div>
-      <div>
-        <h2 className="text-base font-bold">{title}</h2>
-        <p className="text-muted-foreground text-sm">{desc}</p>
-      </div>
+      <Slider value={[value]} onValueChange={([v]) => onChange(v)} min={min} max={max} step={step} />
     </div>
   );
 }
 
-// ── Obs how-to steps ──────────────────────────────────────────────────────────
-function ObsHowTo() {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="rounded-xl border border-border bg-card/50">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-4 py-3 text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <Info className="w-4 h-4" />
-        Como adicionar no OBS / TikTok Studio / Streamlabs
-        {open ? <ChevronDown className="w-4 h-4 ml-auto" /> : <ChevronRight className="w-4 h-4 ml-auto" />}
-      </button>
-      {open && (
-        <div className="px-4 pb-4 space-y-3">
-          <Separator />
-          {[
-            { n: 1, t: "Copie a URL do overlay", d: "Use o botão \"Copiar URL\" em qualquer overlay abaixo com o seu username." },
-            { n: 2, t: "OBS: Adicionar Browser Source", d: "Sources → (+) → Browser Source. Cole a URL. Resolução: 1920×1080. Marque \"Shutdown source when not visible\"." },
-            { n: 3, t: "TikTok LIVE Studio", d: "Configurações → Sources → (+) → Browser Source. Cole a mesma URL." },
-            { n: 4, t: "Streamlabs / Streamlabs Desktop", d: "Sources → (+) → Browser Source. Cole a URL e defina a resolução." },
-            { n: 5, t: "Fundo transparente", d: "Todos os overlays são 100% transparentes por padrão — funciona perfeitamente com chroma key ou background removal." },
-          ].map(s => (
-            <div key={s.n} className="flex gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">{s.n}</div>
-              <div>
-                <p className="font-semibold text-sm">{s.t}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{s.d}</p>
-              </div>
-            </div>
-          ))}
+function OverlaySettings({ id, settings, update }: {
+  id: OverlayId;
+  settings: Settings;
+  update: (patch: Partial<Settings>) => void;
+}) {
+  const posOptions = ["top-center", "top-left", "top-right", "bottom-left", "bottom-right", "bottom-center"];
+
+  if (id === "alerts") {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <SettingLabel>Eventos</SettingLabel>
+          <div className="space-y-2">
+            <ToggleField label="🎁 Gifts" value={settings.gifts as boolean} onChange={(v) => update({ gifts: v })} />
+            <ToggleField label="💙 Follows / Shares" value={settings.follows as boolean} onChange={(v) => update({ follows: v })} />
+            <ToggleField label="❤️ Tap Tap (likes burst)" value={settings.likes as boolean} onChange={(v) => update({ likes: v })} />
+            <ToggleField label="⭐ Membros / Subscribe" value={settings.subs as boolean} onChange={(v) => update({ subs: v })} />
+            <ToggleField label="👋 Entradas na live" value={settings.joins as boolean} onChange={(v) => update({ joins: v })} />
+          </div>
         </div>
-      )}
+        <div className="space-y-2">
+          <SettingLabel>Posição</SettingLabel>
+          <Select value={settings.pos as string} onValueChange={(v) => update({ pos: v })}>
+            <SelectTrigger data-testid="alerts-pos-select"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {posOptions.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <SliderField label="Mínimo de diamonds" unit="💎" value={settings.min as number} onChange={(v) => update({ min: v })} min={0} max={500} step={10} />
+      </div>
+    );
+  }
+
+  if (id === "combo") {
+    return (
+      <div className="space-y-4">
+        <SliderField label="Mínimo de combos" unit="x" value={settings.min as number} onChange={(v) => update({ min: v })} min={2} max={20} />
+        <SliderField label="Likes p/ Tap-Tap" value={settings.tap as number} onChange={(v) => update({ tap: v })} min={5} max={100} step={5} />
+        <div className="rounded-lg bg-muted/30 border border-border p-3 text-xs text-muted-foreground space-y-1">
+          <p className="font-semibold text-foreground">Gifts com animação especial:</p>
+          <p>🥊 Luva · 🦁 Lion · 🌌 Galaxy · 🪐 Universe · 🏰 Castle · 🌹 Rose · 🎭 Drama · 🎵 TikTok</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (id === "topGifters") {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label className="text-sm">Título</Label>
+          <Input value={settings.title as string} onChange={(e) => update({ title: e.target.value })} placeholder="Top Gifters" />
+        </div>
+        <SliderField label="Nº de entradas" unit="" value={settings.max as number} onChange={(v) => update({ max: v })} min={3} max={10} />
+        <ToggleField label="💎 Mostrar diamonds" value={settings.diamonds as boolean} onChange={(v) => update({ diamonds: v })} />
+        <ToggleField label="📦 Modo compacto" value={settings.compact as boolean} onChange={(v) => update({ compact: v })} />
+      </div>
+    );
+  }
+
+  if (id === "stats") {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <SettingLabel>Layout</SettingLabel>
+          <Select value={settings.layout as string} onValueChange={(v) => update({ layout: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="horizontal">Horizontal</SelectItem>
+              <SelectItem value="vertical">Vertical</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <SettingLabel>Métricas</SettingLabel>
+          <ToggleField label="👁 Viewers" value={settings.viewers as boolean} onChange={(v) => update({ viewers: v })} />
+          <ToggleField label="❤️ Likes" value={settings.likes as boolean} onChange={(v) => update({ likes: v })} />
+          <ToggleField label="👤 Seguidores" value={settings.followers as boolean} onChange={(v) => update({ followers: v })} />
+          <ToggleField label="💎 Diamonds" value={settings.diamonds as boolean} onChange={(v) => update({ diamonds: v })} />
+          <ToggleField label="🔴 Badge LIVE" value={settings.badge as boolean} onChange={(v) => update({ badge: v })} />
+        </div>
+      </div>
+    );
+  }
+
+  if (id === "goal") {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label className="text-sm">Tipo de meta</Label>
+          <Select value={settings.mode as string} onValueChange={(v) => update({ mode: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="diamonds">💎 Diamonds</SelectItem>
+              <SelectItem value="viewers">👁 Viewers</SelectItem>
+              <SelectItem value="likes">❤️ Likes</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-sm">Valor</Label>
+          <Input type="number" min={1} value={settings.goal as number} onChange={(e) => update({ goal: Number(e.target.value) })} />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-sm">Label (opcional)</Label>
+          <Input value={settings.label as string} onChange={(e) => update({ label: e.target.value })} placeholder="ex: Meta de Gifts" />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-sm">Cor</Label>
+          <div className="flex items-center gap-2">
+            <input type="color" value={settings.color as string} onChange={(e) => update({ color: e.target.value })}
+              className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent" />
+            <code className="text-xs font-mono text-muted-foreground">{settings.color as string}</code>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (id === "subscribe") {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <SettingLabel>Posição</SettingLabel>
+          <Select value={settings.pos as string} onValueChange={(v) => update({ pos: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {posOptions.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="rounded-lg bg-muted/30 border border-border p-3 text-xs text-muted-foreground space-y-1.5">
+          <p className="font-semibold text-foreground">Variações automáticas:</p>
+          <p>🎉 Novo (1º mês) · ⭐ Veterano (3+m) · 💎 Fiel (12+m)</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (id === "chat") {
+    return (
+      <div className="space-y-4">
+        <SliderField label="Máximo mensagens" value={settings.max as number} onChange={(v) => update({ max: v })} min={3} max={20} />
+        <div className="space-y-2">
+          <SettingLabel>Posição</SettingLabel>
+          <Select value={settings.pos as string} onValueChange={(v) => update({ pos: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {posOptions.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <SliderField label="Opacidade do fundo" unit="%" value={settings.bg as number} onChange={(v) => update({ bg: v })} min={0} max={90} step={5} />
+        <div className="space-y-2">
+          <SettingLabel>Tamanho do texto</SettingLabel>
+          <Select value={settings.size as string} onValueChange={(v) => update({ size: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="sm">Pequeno</SelectItem>
+              <SelectItem value="md">Médio</SelectItem>
+              <SelectItem value="lg">Grande</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+    );
+  }
+
+  if (id === "ticker") {
+    return (
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <SettingLabel>Posição</SettingLabel>
+          <Select value={settings.pos as string} onValueChange={(v) => update({ pos: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="bottom">Inferior</SelectItem>
+              <SelectItem value="top">Superior</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <SliderField label="Mínimo diamonds" unit="💎" value={settings.min as number} onChange={(v) => update({ min: v })} min={0} max={500} step={10} />
+        <SliderField label="Velocidade" unit=" px/s" value={settings.speed as number} onChange={(v) => update({ speed: v })} min={10} max={120} step={10} />
+      </div>
+    );
+  }
+
+  // basic
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <SettingLabel>Conteúdo</SettingLabel>
+        <ToggleField label="💬 Chat" value={settings.chat as boolean} onChange={(v) => update({ chat: v })} />
+        <ToggleField label="🎁 Gifts" value={settings.gifts as boolean} onChange={(v) => update({ gifts: v })} />
+        <ToggleField label="💙 Follows / Shares" value={settings.follows as boolean} onChange={(v) => update({ follows: v })} />
+        <ToggleField label="👁 Barra de stats" value={settings.stats as boolean} onChange={(v) => update({ stats: v })} />
+      </div>
+      <SliderField label="Opacidade fundo" unit="%" value={settings.bg as number} onChange={(v) => update({ bg: v })} min={0} max={80} step={5} />
+      <div className="space-y-2">
+        <SettingLabel>Tamanho texto</SettingLabel>
+        <Select value={settings.size as string} onValueChange={(v) => update({ size: v })}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="sm">Pequeno</SelectItem>
+            <SelectItem value="md">Médio</SelectItem>
+            <SelectItem value="lg">Grande</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   );
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// Main Studio Page
+// ─────────────────────────────────────────────────────────────────
+
 export default function Overlays() {
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
   const { user } = useAuth();
   const defaultUser = user?.tiktokUsername ?? "";
 
-  // Shared username — auto-fill from logged-in account
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+
   const [inputUser, setInputUser] = useState(defaultUser);
-  const [username,  setUsername]  = useState(defaultUser);
-  const apply = useCallback(() => setUsername(inputUser.trim().replace(/^@/, "")), [inputUser]);
+  const [username, setUsername] = useState(defaultUser);
 
-  // ── Alerts overlay config ──────────────────────────────────────────────────
-  const [alertGifts,   setAlertGifts]   = useState(true);
-  const [alertFollows, setAlertFollows] = useState(true);
-  const [alertLikes,   setAlertLikes]   = useState(true);
-  const [alertSubs,    setAlertSubs]    = useState(true);
-  const [alertJoins,   setAlertJoins]   = useState(false);
-  const [alertPos,     setAlertPos]     = useState("top-center");
-  const [alertMin,     setAlertMin]     = useState(0);
+  const [activeId, setActiveId] = useState<OverlayId>("alerts");
+  const [allSettings, setAllSettings] = useState<Record<OverlayId, Settings>>(() =>
+    JSON.parse(JSON.stringify(DEFAULT_SETTINGS))
+  );
 
-  function buildAlertsUrl() {
-    const p = new URLSearchParams();
-    if (!alertGifts)   p.set("gifts", "0");
-    if (!alertFollows) p.set("follows", "0");
-    if (alertLikes)    p.set("likes", "1");
-    if (!alertSubs)    p.set("subs", "0");
-    if (alertJoins)    p.set("joins", "1");
-    if (alertPos !== "top-center") p.set("pos", alertPos);
-    if (alertMin > 0)  p.set("min", String(alertMin));
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/alerts/${username || "SEU_USUARIO"}${qs}`;
-  }
+  const [orientation, setOrientation] = useState<"vertical" | "horizontal">("vertical");
+  const [demoOn, setDemoOn] = useState(true);
+  const [iframeKey, setIframeKey] = useState(0);
 
-  // ── Top Gifters config ─────────────────────────────────────────────────────
-  const [gtMax,      setGtMax]      = useState(5);
-  const [gtDiamonds, setGtDiamonds] = useState(true);
-  const [gtCompact,  setGtCompact]  = useState(false);
-  const [gtTitle,    setGtTitle]    = useState("Top Gifters");
+  const activeDef = OVERLAYS.find((o) => o.id === activeId)!;
 
-  function buildTopGiftersUrl() {
-    const p = new URLSearchParams();
-    if (gtMax !== 5)       p.set("max", String(gtMax));
-    if (!gtDiamonds)       p.set("diamonds", "0");
-    if (gtCompact)         p.set("compact", "1");
-    if (gtTitle !== "Top Gifters") p.set("title", gtTitle);
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/top-gifters/${username || "SEU_USUARIO"}${qs}`;
-  }
+  const applyUsername = useCallback(() => {
+    setUsername(inputUser.trim().replace(/^@/, ""));
+  }, [inputUser]);
 
-  // ── Stats config ───────────────────────────────────────────────────────────
-  const [statsLayout,  setStatsLayout]  = useState("horizontal");
-  const [statsViewers, setStatsViewers] = useState(true);
-  const [statsLikes,   setStatsLikes]   = useState(true);
-  const [statsFoll,    setStatsFoll]    = useState(true);
-  const [statsDiam,    setStatsDiam]    = useState(true);
+  const updateSetting = useCallback((patch: Partial<Settings>) => {
+    setAllSettings((prev) => ({ ...prev, [activeId]: { ...prev[activeId], ...patch } }));
+  }, [activeId]);
 
-  function buildStatsUrl() {
-    const p = new URLSearchParams();
-    if (statsLayout !== "horizontal") p.set("layout", statsLayout);
-    if (!statsViewers) p.set("viewers", "0");
-    if (!statsLikes)   p.set("likes", "0");
-    if (!statsFoll)    p.set("followers", "0");
-    if (!statsDiam)    p.set("diamonds", "0");
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/stats/${username || "SEU_USUARIO"}${qs}`;
-  }
+  const resetActive = useCallback(() => {
+    setAllSettings((prev) => ({ ...prev, [activeId]: { ...DEFAULT_SETTINGS[activeId] } }));
+  }, [activeId]);
 
-  // ── Goal config ────────────────────────────────────────────────────────────
-  const [goalValue, setGoalValue] = useState("1000");
-  const [goalMode,  setGoalMode]  = useState("diamonds");
-  const [goalLabel, setGoalLabel] = useState("");
-  const [goalColor, setGoalColor] = useState("#06b6d4");
+  const effectiveUsername = username || "SEU_USUARIO";
 
-  function buildGoalUrl() {
-    const p = new URLSearchParams();
-    p.set("goal", goalValue);
-    if (goalMode !== "diamonds") p.set("mode", goalMode);
-    if (goalLabel) p.set("label", goalLabel);
-    if (goalColor !== "#06b6d4") p.set("color", goalColor); // URLSearchParams handles encoding
-    return `${origin}/overlay/goal/${username || "SEU_USUARIO"}?${p}`;
-  }
+  const previewUrl = useMemo(() => {
+    const settings = allSettings[activeId];
+    const defaults = DEFAULT_SETTINGS[activeId];
+    const qs = buildQueryString(settings, defaults, demoOn ? { demo: "1" } : {});
+    const path = activeDef.path ? `/overlay/${activeDef.path}/${effectiveUsername}` : `/overlay/${effectiveUsername}`;
+    return `${origin}${path}${qs}`;
+  }, [allSettings, activeId, demoOn, effectiveUsername, activeDef.path, origin]);
 
-  // ── Combo config ───────────────────────────────────────────────────────────
-  const [comboMin, setComboMin] = useState(2);
-  const [comboTap, setComboTap] = useState(30);
+  const exportUrl = useMemo(() => {
+    const settings = allSettings[activeId];
+    const defaults = DEFAULT_SETTINGS[activeId];
+    // Export URL is the same as preview but WITHOUT demo flag
+    const qs = buildQueryString(settings, defaults);
+    const path = activeDef.path ? `/overlay/${activeDef.path}/${effectiveUsername}` : `/overlay/${effectiveUsername}`;
+    return `${origin}${path}${qs}`;
+  }, [allSettings, activeId, effectiveUsername, activeDef.path, origin]);
 
-  function buildComboUrl() {
-    const p = new URLSearchParams();
-    if (comboMin !== 2)  p.set("min", String(comboMin));
-    if (comboTap !== 30) p.set("tap", String(comboTap));
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/combo/${username || "SEU_USUARIO"}${qs}`;
-  }
-
-  // ── Basic overlay (chat + events) ──────────────────────────────────────────
-  const [basicChat,    setBasicChat]    = useState(true);
-  const [basicGifts,   setBasicGifts]   = useState(true);
-  const [basicFollows, setBasicFollows] = useState(true);
-  const [basicStats,   setBasicStats]   = useState(true);
-  const [basicBg,      setBasicBg]      = useState(0);
-  const [basicSize,    setBasicSize]    = useState("md");
-
-  function buildBasicUrl() {
-    const p = new URLSearchParams();
-    if (!basicChat)    p.set("chat", "0");
-    if (!basicGifts)   p.set("gifts", "0");
-    if (!basicFollows) p.set("follows", "0");
-    if (!basicStats)   p.set("stats", "0");
-    if (basicBg > 0)   p.set("bg", String(basicBg));
-    if (basicSize !== "md") p.set("size", basicSize);
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/${username || "SEU_USUARIO"}${qs}`;
-  }
-
-  // ── Subscribe overlay config ───────────────────────────────────────────────
-  const [subPos, setSubPos] = useState("top-right");
-
-  function buildSubscribeUrl() {
-    const p = new URLSearchParams();
-    if (subPos !== "top-right") p.set("pos", subPos);
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/subscribe/${username || "SEU_USUARIO"}${qs}`;
-  }
-
-  // ── Chat Wall overlay config ───────────────────────────────────────────────
-  const [chatMax,  setChatMax]  = useState(8);
-  const [chatPos,  setChatPos]  = useState("bottom-left");
-  const [chatBg,   setChatBg]   = useState(50);
-  const [chatSize, setChatSize] = useState("md");
-
-  function buildChatUrl() {
-    const p = new URLSearchParams();
-    if (chatMax !== 8)           p.set("max", String(chatMax));
-    if (chatPos !== "bottom-left") p.set("pos", chatPos);
-    if (chatBg !== 50)           p.set("bg", String(chatBg));
-    if (chatSize !== "md")       p.set("size", chatSize);
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/chat/${username || "SEU_USUARIO"}${qs}`;
-  }
-
-  // ── Gift Ticker overlay config ─────────────────────────────────────────────
-  const [tickerPos,   setTickerPos]   = useState("bottom");
-  const [tickerMin,   setTickerMin]   = useState(0);
-  const [tickerSpeed, setTickerSpeed] = useState(40);
-
-  function buildTickerUrl() {
-    const p = new URLSearchParams();
-    if (tickerPos !== "bottom") p.set("pos", tickerPos);
-    if (tickerMin > 0)          p.set("min", String(tickerMin));
-    if (tickerSpeed !== 40)     p.set("speed", String(tickerSpeed));
-    const qs = p.toString() ? `?${p}` : "";
-    return `${origin}/overlay/ticker/${username || "SEU_USUARIO"}${qs}`;
-  }
+  const canvasStyle = orientation === "vertical"
+    ? { aspectRatio: "9 / 16", maxHeight: "80vh" }
+    : { aspectRatio: "16 / 9", maxHeight: "80vh" };
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      {/* ── Header ── */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-violet-600/20 via-cyan-500/10 to-pink-500/20 border border-white/10 p-6">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(139,92,246,0.15),transparent_60%)] pointer-events-none" />
-        <div className="relative flex items-start gap-4">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center shrink-0 shadow-lg shadow-violet-500/30">
-            <Monitor className="w-6 h-6 text-white" />
-          </div>
-          <div className="flex-1">
-            <h1 className="text-2xl font-bold">Overlay Studio</h1>
-            <p className="text-muted-foreground text-sm mt-1 max-w-xl">
-              Overlays profissionais em tempo real para OBS, TikTok LIVE Studio e Streamlabs. Configure, copie a URL e adicione como Browser Source.
-            </p>
-            <div className="flex items-center gap-2 mt-3 flex-wrap">
-              {["OBS Studio", "TikTok Studio", "Streamlabs", "XSplit", "Twitch Studio"].map(s => (
-                <Badge key={s} variant="outline" className="text-xs border-white/15 text-white/60">{s}</Badge>
-              ))}
+    <div className="space-y-6" data-testid="overlay-studio-page">
+      {/* Header */}
+      <div className="relative overflow-hidden rounded-2xl border border-white/10 p-6"
+        style={{ background: "linear-gradient(135deg, rgba(139,92,246,0.15), rgba(6,182,212,0.08), rgba(236,72,153,0.12))" }}>
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(139,92,246,0.20),transparent_60%)] pointer-events-none" />
+        <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center shrink-0 shadow-lg shadow-violet-500/30">
+              <Monitor className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold">Overlay Studio</h1>
+              <p className="text-muted-foreground text-sm mt-1 max-w-xl">
+                Preview vertical (TikTok mobile) ou horizontal em tempo real. Ajuste, veja o resultado, copie a URL para OBS/TikTok LIVE Studio.
+              </p>
+              <div className="flex items-center gap-2 mt-3 flex-wrap">
+                {["OBS Studio", "TikTok LIVE Studio", "Streamlabs", "XSplit"].map((s) => (
+                  <Badge key={s} variant="outline" className="text-xs border-white/15 text-white/60">{s}</Badge>
+                ))}
+              </div>
             </div>
           </div>
+
+          {/* Username input */}
+          <Card className="min-w-[260px] shrink-0">
+            <CardContent className="p-3 space-y-2">
+              <Label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Username TikTok</Label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">@</span>
+                  <Input
+                    placeholder="seu_usuario"
+                    className="pl-6 h-8 font-mono text-sm"
+                    value={inputUser}
+                    onChange={(e) => setInputUser(e.target.value.replace(/^@/, ""))}
+                    onKeyDown={(e) => e.key === "Enter" && applyUsername()}
+                    data-testid="username-input"
+                  />
+                </div>
+                <Button size="sm" onClick={applyUsername} disabled={!inputUser.trim()} className="h-8" data-testid="apply-username-btn">
+                  Aplicar
+                </Button>
+              </div>
+              {username && (
+                <Badge className="bg-green-500/15 text-green-400 border-green-500/20 text-[10px]">
+                  ✓ @{username}
+                </Badge>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
 
-      {/* ── Username input (shared) ── */}
-      <Card>
-        <CardContent className="pt-5">
-          <div className="flex items-end gap-3">
-            <div className="flex-1 space-y-1.5">
-              <Label className="text-sm font-semibold">Username do TikTok <span className="text-muted-foreground font-normal">(aplicado a todos os overlays)</span></Label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">@</span>
-                  <Input
-                    placeholder="seu_usuario"
-                    className="pl-7 font-mono"
-                    value={inputUser}
-                    onChange={(e) => setInputUser(e.target.value.replace(/^@/, ""))}
-                    onKeyDown={(e) => e.key === "Enter" && apply()}
-                  />
+      {/* Overlay tabs */}
+      <div className="flex gap-2 flex-wrap">
+        {OVERLAYS.map((o) => {
+          const Icon = o.icon;
+          const isActive = activeId === o.id;
+          return (
+            <button
+              key={o.id}
+              onClick={() => setActiveId(o.id)}
+              data-testid={`overlay-tab-${o.id}`}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium transition-all border ${
+                isActive
+                  ? "bg-white/10 border-white/25 text-white shadow-lg"
+                  : "bg-transparent border-white/8 text-muted-foreground hover:bg-white/5 hover:text-white"
+              }`}
+            >
+              <span className={`w-6 h-6 rounded-md bg-gradient-to-br ${o.color} flex items-center justify-center shrink-0`}>
+                <Icon className="w-3.5 h-3.5 text-white" />
+              </span>
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Main grid: controls + canvas */}
+      <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-5">
+        {/* Left: Controls */}
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="p-4 space-y-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-9 h-9 rounded-lg bg-gradient-to-br ${activeDef.color} flex items-center justify-center shrink-0 shadow-lg`}>
+                    <activeDef.icon className="w-4.5 h-4.5 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-sm">{activeDef.label}</p>
+                    <p className="text-[11px] text-muted-foreground">{activeDef.desc}</p>
+                  </div>
                 </div>
-                <Button onClick={apply} disabled={!inputUser.trim()}>Aplicar</Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={resetActive} title="Resetar">
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </Button>
               </div>
+
+              <div className="border-t border-border pt-4">
+                <OverlaySettings id={activeId} settings={allSettings[activeId]} update={updateSetting} />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Instructions */}
+          <Card className="border-dashed">
+            <CardContent className="p-3.5 space-y-2 text-xs">
+              <div className="flex items-center gap-1.5 text-primary font-semibold">
+                <Info className="w-3.5 h-3.5" />
+                Como usar no OBS / TikTok Studio
+              </div>
+              <ol className="space-y-1 text-muted-foreground list-decimal list-inside pl-1">
+                <li>Copie a URL do overlay abaixo</li>
+                <li>OBS/TikTok Studio: Sources → (+) → Browser Source</li>
+                <li>Cole a URL, defina 1080×1920 (vertical) ou 1920×1080 (horizontal)</li>
+                <li>Marque "Shutdown source when not visible"</li>
+                <li>Fundo é 100% transparente por padrão</li>
+              </ol>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right: Canvas + toolbar */}
+        <div className="space-y-3">
+          {/* Toolbar */}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 rounded-lg border border-white/10 p-1 bg-card">
+              <button
+                onClick={() => setOrientation("vertical")}
+                data-testid="orientation-vertical-btn"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  orientation === "vertical" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-white"
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                Vertical <span className="text-[10px] opacity-60">9:16</span>
+              </button>
+              <button
+                onClick={() => setOrientation("horizontal")}
+                data-testid="orientation-horizontal-btn"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  orientation === "horizontal" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-white"
+                }`}
+              >
+                <Tv className="w-3.5 h-3.5" />
+                Horizontal <span className="text-[10px] opacity-60">16:9</span>
+              </button>
             </div>
-            {username && (
-              <Badge className="mb-0.5 bg-green-500/15 text-green-400 border-green-500/20 text-sm px-3">
-                ✓ @{username}
-              </Badge>
-            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setDemoOn((v) => !v)}
+                data-testid="demo-toggle-btn"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                  demoOn
+                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                    : "bg-transparent text-muted-foreground border-white/10 hover:text-white"
+                }`}
+              >
+                {demoOn ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                Demo {demoOn ? "ON" : "OFF"}
+                {demoOn && <Sparkles className="w-3 h-3" />}
+              </button>
+              <Button variant="outline" size="sm" onClick={() => setIframeKey((k) => k + 1)} className="gap-1.5 h-8" data-testid="reload-preview-btn">
+                <RotateCcw className="w-3.5 h-3.5" />
+                Recarregar
+              </Button>
+            </div>
           </div>
-        </CardContent>
-      </Card>
 
-      <ObsHowTo />
-
-      <Tabs defaultValue="alerts" className="space-y-4">
-        <TabsList className="bg-card border border-border flex-wrap h-auto gap-1 p-1">
-          <TabsTrigger value="alerts"    className="gap-1.5"><Zap       className="w-3.5 h-3.5"/>Alertas</TabsTrigger>
-          <TabsTrigger value="combo"     className="gap-1.5"><Gamepad2  className="w-3.5 h-3.5"/>Combos</TabsTrigger>
-          <TabsTrigger value="gifters"   className="gap-1.5"><Trophy    className="w-3.5 h-3.5"/>Top Gifters</TabsTrigger>
-          <TabsTrigger value="stats"     className="gap-1.5"><BarChart2 className="w-3.5 h-3.5"/>Stats Bar</TabsTrigger>
-          <TabsTrigger value="goal"      className="gap-1.5"><Target    className="w-3.5 h-3.5"/>Meta</TabsTrigger>
-          <TabsTrigger value="subscribe" className="gap-1.5"><Star      className="w-3.5 h-3.5"/>Membros</TabsTrigger>
-          <TabsTrigger value="chat"      className="gap-1.5"><MessageSquare className="w-3.5 h-3.5"/>Chat Wall</TabsTrigger>
-          <TabsTrigger value="ticker"    className="gap-1.5"><Ticket    className="w-3.5 h-3.5"/>Gift Ticker</TabsTrigger>
-          <TabsTrigger value="basic"     className="gap-1.5"><Monitor   className="w-3.5 h-3.5"/>Chat + Eventos</TabsTrigger>
-        </TabsList>
-
-        {/* ── ALERTS ── */}
-        <TabsContent value="alerts" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={Zap} title="Overlay de Alertas" color="bg-gradient-to-br from-orange-500 to-red-600"
-                desc="Alertas animados para gifts, follows, shares e tap-tap. Suporte a luva, lion, galaxy e mais." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Eventos</Label>
-                  {[
-                    { label: "🎁 Gifts", value: alertGifts, set: setAlertGifts },
-                    { label: "💙 Follows / Shares", value: alertFollows, set: setAlertFollows },
-                    { label: "❤️ Tap Tap (likes burst)", value: alertLikes, set: setAlertLikes },
-                    { label: "⭐ Membros / Subscribe", value: alertSubs, set: setAlertSubs },
-                    { label: "👋 Entradas na live", value: alertJoins, set: setAlertJoins },
-                  ].map(({ label, value, set }) => (
-                    <div key={label} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/40 border border-border">
-                      <Label className="text-sm">{label}</Label>
-                      <Switch checked={value} onCheckedChange={set} />
-                    </div>
-                  ))}
-                </div>
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Posição</Label>
-                  <Select value={alertPos} onValueChange={setAlertPos}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {["top-center","top-left","top-right","bottom-left","bottom-right","bottom-center"].map(v => (
-                        <SelectItem key={v} value={v}>{v}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between">
-                      <Label className="text-sm">Mínimo de diamonds</Label>
-                      <span className="text-xs font-mono text-muted-foreground">💎 {alertMin}</span>
-                    </div>
-                    <Slider value={[alertMin]} onValueChange={([v]) => setAlertMin(v)} min={0} max={500} step={10} />
-                    <p className="text-xs text-muted-foreground">Gifts abaixo desse valor não disparam alerta</p>
-                  </div>
-                </div>
+          {/* Canvas */}
+          <div className="rounded-2xl overflow-hidden border border-white/10 shadow-2xl relative"
+            style={{
+              background:
+                "repeating-conic-gradient(#1f1f24 0% 25%, #17171b 0% 50%) 50% / 24px 24px",
+              padding: "20px",
+            }}
+            data-testid="canvas-container"
+          >
+            <div className="mx-auto rounded-xl overflow-hidden shadow-lg relative bg-black" style={canvasStyle} data-testid="preview-canvas">
+              {/* Simulated live background — subtle gradient */}
+              <div className="absolute inset-0" style={{
+                background: "linear-gradient(180deg, rgba(139,92,246,0.10), rgba(0,0,0,0) 50%, rgba(236,72,153,0.10))",
+              }} />
+              <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/60 text-white text-[10px] backdrop-blur-sm border border-white/10 z-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                LIVE PREVIEW
               </div>
-
-              <UrlBox url={buildAlertsUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── COMBOS ── */}
-        <TabsContent value="combo" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={Gamepad2} title="Combos & Tap-Tap" color="bg-gradient-to-br from-pink-500 to-purple-600"
-                desc="Animação central na tela quando um gift é repetido (2x, 3x, LUVA!) ou muitos likes chegam ao mesmo tempo." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <Label className="text-sm">Mínimo de combos para ativar</Label>
-                    <span className="text-xs font-mono text-primary">{comboMin}x</span>
-                  </div>
-                  <Slider value={[comboMin]} onValueChange={([v]) => setComboMin(v)} min={2} max={20} step={1} />
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <Label className="text-sm">Likes para acionar Tap-Tap</Label>
-                    <span className="text-xs font-mono text-primary">{comboTap} likes</span>
-                  </div>
-                  <Slider value={[comboTap]} onValueChange={([v]) => setComboTap(v)} min={5} max={100} step={5} />
-                </div>
-              </div>
-
-              <div className="rounded-lg bg-muted/30 border border-border p-3 text-xs text-muted-foreground space-y-1">
-                <p className="font-semibold text-foreground">Gifts suportados com animação especial:</p>
-                <p>🥊 Luva · 🦁 Lion · 🌌 Galaxy · 🪐 Universe · 🏰 Castle · 🌹 Rose · 🎭 Drama · 🎵 TikTok · 🎁 Qualquer gift</p>
-                <p>👆 Tap Tap — detectado automaticamente por burst de likes</p>
-              </div>
-
-              <UrlBox url={buildComboUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── TOP GIFTERS ── */}
-        <TabsContent value="gifters" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={Trophy} title="Top Gifters ao Vivo" color="bg-gradient-to-br from-yellow-500 to-amber-600"
-                desc="Placar em tempo real dos maiores doadores da live. Atualiza a cada gift recebido." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Título do placar</Label>
-                    <Input value={gtTitle} onChange={(e) => setGtTitle(e.target.value)} placeholder="Top Gifters" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between">
-                      <Label className="text-sm">Nº de entradas</Label>
-                      <span className="text-xs font-mono text-primary">Top {gtMax}</span>
-                    </div>
-                    <Slider value={[gtMax]} onValueChange={([v]) => setGtMax(v)} min={3} max={10} step={1} />
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  {[
-                    { label: "💎 Mostrar diamonds", value: gtDiamonds, set: setGtDiamonds },
-                    { label: "📦 Modo compacto (horizontal)", value: gtCompact, set: setGtCompact },
-                  ].map(({ label, value, set }) => (
-                    <div key={label} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/40 border border-border">
-                      <Label className="text-sm">{label}</Label>
-                      <Switch checked={value} onCheckedChange={set} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <UrlBox url={buildTopGiftersUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── STATS ── */}
-        <TabsContent value="stats" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={BarChart2} title="Barra de Stats" color="bg-gradient-to-br from-cyan-500 to-blue-600"
-                desc="Counter de viewers, likes, seguidores e diamonds no canto da tela. Atualiza em tempo real." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Layout</Label>
-                  <Select value={statsLayout} onValueChange={setStatsLayout}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="horizontal">Horizontal (linha)</SelectItem>
-                      <SelectItem value="vertical">Vertical (coluna)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Métricas</Label>
-                  {[
-                    { label: "👁 Viewers", v: statsViewers, s: setStatsViewers },
-                    { label: "❤️ Likes", v: statsLikes, s: setStatsLikes },
-                    { label: "👤 Seguidores", v: statsFoll, s: setStatsFoll },
-                    { label: "💎 Diamonds", v: statsDiam, s: setStatsDiam },
-                  ].map(({ label, v, s }) => (
-                    <div key={label} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-muted/40 border border-border">
-                      <Label className="text-sm">{label}</Label>
-                      <Switch checked={v} onCheckedChange={s} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <UrlBox url={buildStatsUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── GOAL ── */}
-        <TabsContent value="goal" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={Target} title="Barra de Meta" color="bg-gradient-to-br from-emerald-500 to-teal-600"
-                desc="Barra de progresso animada para metas de diamonds, viewers ou likes. Brilha ao atingir a meta." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Tipo de meta</Label>
-                    <Select value={goalMode} onValueChange={setGoalMode}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="diamonds">💎 Diamonds</SelectItem>
-                        <SelectItem value="viewers">👁 Viewers</SelectItem>
-                        <SelectItem value="likes">❤️ Likes</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Valor da meta</Label>
-                    <Input
-                      type="number" min={1}
-                      value={goalValue}
-                      onChange={(e) => setGoalValue(e.target.value)}
-                      placeholder="1000"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Label personalizada <span className="text-muted-foreground">(opcional)</span></Label>
-                    <Input
-                      value={goalLabel}
-                      onChange={(e) => setGoalLabel(e.target.value)}
-                      placeholder="ex: Meta de Gifts"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Cor da barra</Label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color" value={goalColor}
-                        onChange={(e) => setGoalColor(e.target.value)}
-                        className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent"
-                      />
-                      <code className="text-xs font-mono text-muted-foreground">{goalColor}</code>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <UrlBox url={buildGoalUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── SUBSCRIBE ── */}
-        <TabsContent value="subscribe" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={Star} title="Alerta de Membros / Subscribe" color="bg-gradient-to-br from-violet-500 to-indigo-600"
-                desc="Animação exclusiva quando um viewer assina (se torna membro) da sua live. Aparece automaticamente." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Posição</Label>
-                  <Select value={subPos} onValueChange={setSubPos}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {["top-center","top-left","top-right","bottom-left","bottom-right","bottom-center"].map(v => (
-                        <SelectItem key={v} value={v}>{v}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="rounded-lg bg-muted/30 border border-border p-3 text-xs text-muted-foreground space-y-1.5">
-                  <p className="font-semibold text-foreground">Variações visuais automáticas:</p>
-                  <p>🎉 Novo membro (1º mês)</p>
-                  <p>⭐ Membro veterano (3+ meses)</p>
-                  <p>💎 Membro fiel (12+ meses)</p>
-                </div>
-              </div>
-
-              <UrlBox url={buildSubscribeUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── CHAT WALL ── */}
-        <TabsContent value="chat" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={MessageSquare} title="Chat Wall" color="bg-gradient-to-br from-blue-500 to-cyan-600"
-                desc="Feed limpo só com mensagens do chat. Ideal para streams sem poluição visual. Transparente e personalizável." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between">
-                      <Label className="text-sm">Máximo de mensagens</Label>
-                      <span className="text-xs font-mono text-primary">{chatMax}</span>
-                    </div>
-                    <Slider value={[chatMax]} onValueChange={([v]) => setChatMax(v)} min={3} max={20} step={1} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Posição</Label>
-                    <Select value={chatPos} onValueChange={setChatPos}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {["bottom-left","bottom-right","top-left","top-right","bottom-center","top-center"].map(v => (
-                          <SelectItem key={v} value={v}>{v}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between">
-                      <Label className="text-sm">Opacidade do fundo</Label>
-                      <span className="text-xs font-mono text-muted-foreground">{chatBg}%</span>
-                    </div>
-                    <Slider value={[chatBg]} onValueChange={([v]) => setChatBg(v)} min={0} max={90} step={5} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Tamanho do texto</Label>
-                    <Select value={chatSize} onValueChange={setChatSize}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="sm">Pequeno</SelectItem>
-                        <SelectItem value="md">Médio (padrão)</SelectItem>
-                        <SelectItem value="lg">Grande</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-
-              <UrlBox url={buildChatUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── GIFT TICKER ── */}
-        <TabsContent value="ticker" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={Ticket} title="Gift Ticker" color="bg-gradient-to-br from-amber-500 to-orange-600"
-                desc="Faixa horizontal rolante com os últimos gifts recebidos. Aparece na parte inferior ou superior da tela." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Posição</Label>
-                    <Select value={tickerPos} onValueChange={setTickerPos}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="bottom">Inferior (padrão)</SelectItem>
-                        <SelectItem value="top">Superior</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between">
-                      <Label className="text-sm">Mínimo de diamonds</Label>
-                      <span className="text-xs font-mono text-muted-foreground">💎 {tickerMin}</span>
-                    </div>
-                    <Slider value={[tickerMin]} onValueChange={([v]) => setTickerMin(v)} min={0} max={500} step={10} />
-                    <p className="text-xs text-muted-foreground">Gifts abaixo desse valor não aparecem no ticker</p>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between">
-                      <Label className="text-sm">Velocidade de rolagem</Label>
-                      <span className="text-xs font-mono text-primary">{tickerSpeed} px/s</span>
-                    </div>
-                    <Slider value={[tickerSpeed]} onValueChange={([v]) => setTickerSpeed(v)} min={10} max={120} step={10} />
-                  </div>
-                  <div className="rounded-lg bg-muted/30 border border-border p-3 text-xs text-muted-foreground">
-                    <p className="font-semibold text-foreground mb-1">Dica</p>
-                    <p>Use junto com o overlay de Alertas para uma experiência completa — o Ticker mostra histórico enquanto os Alertas aparecem em destaque.</p>
-                  </div>
-                </div>
-              </div>
-
-              <UrlBox url={buildTickerUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── BASIC (chat) ── */}
-        <TabsContent value="basic" className="space-y-4">
-          <Card>
-            <CardContent className="pt-5 space-y-5">
-              <SectionHeader icon={Monitor} title="Chat + Eventos" color="bg-gradient-to-br from-violet-500 to-fuchsia-600"
-                desc="Overlay clássico com chat ao vivo, alertas de gift e barra de stats no canto. O mais completo." />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conteúdo</Label>
-                  {[
-                    { label: "💬 Chat", v: basicChat, s: setBasicChat },
-                    { label: "🎁 Gifts", v: basicGifts, s: setBasicGifts },
-                    { label: "💙 Follows / Shares", v: basicFollows, s: setBasicFollows },
-                    { label: "👁 Barra de stats", v: basicStats, s: setBasicStats },
-                  ].map(({ label, v, s }) => (
-                    <div key={label} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-muted/40 border border-border">
-                      <Label className="text-sm">{label}</Label>
-                      <Switch checked={v} onCheckedChange={s} />
-                    </div>
-                  ))}
-                </div>
-                <div className="space-y-3">
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <Label className="text-sm">Opacidade do fundo</Label>
-                      <span className="text-xs font-mono text-muted-foreground">{basicBg}%</span>
-                    </div>
-                    <Slider value={[basicBg]} onValueChange={([v]) => setBasicBg(v)} min={0} max={80} step={5} />
-                    <p className="text-xs text-muted-foreground">0% = totalmente transparente (recomendado)</p>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Tamanho do texto</Label>
-                    <Select value={basicSize} onValueChange={setBasicSize}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="sm">Pequeno</SelectItem>
-                        <SelectItem value="md">Médio (padrão)</SelectItem>
-                        <SelectItem value="lg">Grande</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-
-              <UrlBox url={buildBasicUrl()} label="URL do Overlay — cole no OBS Browser Source" />
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-
-      {/* ── Quick Reference ── */}
-      <Card className="border-dashed">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <Gift className="w-4 h-4 text-primary" /> Referência rápida de overlays
-          </CardTitle>
-          <CardDescription className="text-xs">Todas as URLs geradas para @{username || "SEU_USUARIO"}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {[
-            { label: "Alertas (gifts, follows, tap-tap, sub)", url: buildAlertsUrl() },
-            { label: "Combos & Luva (tap-tap 2x, 3x...)", url: buildComboUrl() },
-            { label: "Top Gifters", url: buildTopGiftersUrl() },
-            { label: "Stats Bar", url: buildStatsUrl() },
-            { label: "Barra de Meta", url: buildGoalUrl() },
-            { label: "Membros / Subscribe", url: buildSubscribeUrl() },
-            { label: "Chat Wall", url: buildChatUrl() },
-            { label: "Gift Ticker", url: buildTickerUrl() },
-            { label: "Chat + Eventos (completo)", url: buildBasicUrl() },
-          ].map(({ label, url }) => (
-            <div key={label} className="flex items-center gap-2 py-1">
-              <span className="text-xs text-muted-foreground w-44 shrink-0">{label}</span>
-              <code className="flex-1 text-xs font-mono text-primary/70 truncate">{url}</code>
-              <CopyBtn value={url} />
+              <iframe
+                key={`${previewUrl}-${iframeKey}`}
+                src={previewUrl}
+                title="Overlay preview"
+                className="absolute inset-0 w-full h-full border-0 z-10"
+                style={{ background: "transparent" }}
+                data-testid="preview-iframe"
+              />
             </div>
-          ))}
-        </CardContent>
-      </Card>
+          </div>
+
+          {/* URL box */}
+          <Card>
+            <CardContent className="p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
+                <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                URL para OBS / TikTok Studio
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs font-mono text-primary/80 break-all leading-relaxed px-3 py-2 rounded-lg bg-muted/40 border border-border" data-testid="export-url-box">
+                  {exportUrl}
+                </code>
+                <div className="flex flex-col gap-1.5">
+                  <CopyButton value={exportUrl} />
+                  <Button variant="ghost" size="sm" asChild className="gap-1.5 px-2" data-testid="open-preview-btn">
+                    <a href={exportUrl} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Abrir
+                    </a>
+                  </Button>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                A URL não inclui <code className="text-primary/70">?demo=1</code> — é a URL real que envia dados da @{effectiveUsername} para o overlay.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

@@ -4,8 +4,9 @@
  * Ideal para stream sem poluição visual de eventos.
  * Transparente, sem auth, roda direto no OBS/TikTok Studio.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 interface ChatMsg {
   id: string;
@@ -56,14 +57,40 @@ export default function OverlayChat() {
   const showMod  = p.get("mod") !== "0";
   const showSub  = p.get("sub") !== "0";
   const bgOpacity = Number(p.get("bg") ?? "50");
+  const isDemo   = p.get("demo") === "1";
 
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const counterRef = useRef(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    if (data.type === "chat") {
+      const d = data as {
+        uniqueId?: string; nickname?: string; comment?: string;
+        isModerator?: boolean; isSubscriber?: boolean;
+      };
+      const comment = d.comment?.trim() ?? "";
+      if (!comment) return;
+      const id = String(++counterRef.current);
+      setMessages((prev) => [
+        ...prev.slice(-(maxMsgs - 1)),
+        {
+          id,
+          nickname: d.nickname ?? d.uniqueId ?? "?",
+          comment,
+          isMod: !!d.isModerator,
+          isSub: !!d.isSubscriber,
+          ts: Date.now(),
+        },
+      ]);
+    }
+  }, [maxMsgs]);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 1500 });
+
   useEffect(() => {
-    if (!username) return;
+    if (!username || isDemo) return;
     let destroyed = false;
 
     async function connect() {
@@ -89,27 +116,7 @@ export default function OverlayChat() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            if (data.type === "chat") {
-              const d = data as {
-                uniqueId?: string; nickname?: string; comment?: string;
-                isModerator?: boolean; isSubscriber?: boolean;
-              };
-              const comment = d.comment?.trim() ?? "";
-              if (!comment) return;
-              const id = String(++counterRef.current);
-              setMessages((prev) => [
-                ...prev.slice(-(maxMsgs - 1)),
-                {
-                  id,
-                  nickname: d.nickname ?? d.uniqueId ?? "?",
-                  comment,
-                  isMod: !!d.isModerator,
-                  isSub: !!d.isSubscriber,
-                  ts: Date.now(),
-                },
-              ]);
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch { /* ignore */ }
@@ -122,7 +129,7 @@ export default function OverlayChat() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [username, maxMsgs]);
+  }, [username, isDemo, processMessage]);
 
   const posClass: Record<string, string> = {
     "top-left":      "top-4 left-4",

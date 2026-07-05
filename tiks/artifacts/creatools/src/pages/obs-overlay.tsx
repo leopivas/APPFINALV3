@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 interface OverlayEvent {
   id: string;
@@ -85,6 +86,7 @@ export default function ObsOverlay() {
   const showStats   = params.get("stats")   !== "0";
   const bgOpacity   = params.get("bg") ?? "40";
   const fontSize    = params.get("size") ?? "md";
+  const isDemo      = params.get("demo") === "1";
 
   const [events, setEvents] = useState<OverlayEvent[]>([]);
   const [stats, setStats] = useState<RoomStats | null>(null);
@@ -102,7 +104,31 @@ export default function ObsOverlay() {
     }, 12000);
   }
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    const type = data.type as string;
+
+    if (type === "roomUser") {
+      const d = data as { viewerCount?: number; likeCount?: number; totalFollowers?: number };
+      setStats({ viewerCount: d.viewerCount ?? 0, likeCount: d.likeCount ?? 0, totalFollowers: d.totalFollowers ?? 0 });
+    } else if (type === "chat" && showChat) {
+      const d = data as { nickname?: string; comment?: string };
+      addEvent({ type: "chat", nickname: d.nickname ?? "?", message: d.comment ?? "" });
+    } else if (type === "gift" && showGifts) {
+      const d = data as { nickname?: string; giftName?: string; repeatCount?: number; diamondCount?: number; giftType?: number };
+      if (d.giftType !== 1) {
+        addEvent({ type: "gift", nickname: d.nickname ?? "?", giftName: d.giftName ?? "Gift", giftCount: d.repeatCount, diamonds: d.diamondCount });
+      }
+    } else if (type === "social" && showFollows) {
+      const d = data as { nickname?: string; event?: string };
+      if (d.event === "follow") addEvent({ type: "follow", nickname: d.nickname ?? "?" });
+      if (d.event === "share") addEvent({ type: "share", nickname: d.nickname ?? "?" });
+    }
+  }, [showChat, showGifts, showFollows]);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 1000 });
+
   useEffect(() => {
+    if (isDemo) { setStatus("live"); return; }
     if (!username) return;
 
     let destroyed = false;
@@ -134,25 +160,7 @@ export default function ObsOverlay() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            const type = data.type as string;
-
-            if (type === "roomUser") {
-              const d = data as { viewerCount?: number; likeCount?: number; totalFollowers?: number };
-              setStats({ viewerCount: d.viewerCount ?? 0, likeCount: d.likeCount ?? 0, totalFollowers: d.totalFollowers ?? 0 });
-            } else if (type === "chat" && showChat) {
-              const d = data as { nickname?: string; comment?: string };
-              addEvent({ type: "chat", nickname: d.nickname ?? "?", message: d.comment ?? "" });
-            } else if (type === "gift" && showGifts) {
-              const d = data as { nickname?: string; giftName?: string; repeatCount?: number; diamondCount?: number; giftType?: number };
-              if (d.giftType !== 1) {
-                addEvent({ type: "gift", nickname: d.nickname ?? "?", giftName: d.giftName ?? "Gift", giftCount: d.repeatCount, diamonds: d.diamondCount });
-              }
-            } else if (type === "social" && showFollows) {
-              const d = data as { nickname?: string; event?: string };
-              if (d.event === "follow") addEvent({ type: "follow", nickname: d.nickname ?? "?" });
-              if (d.event === "share") addEvent({ type: "share", nickname: d.nickname ?? "?" });
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch {
@@ -165,7 +173,7 @@ export default function ObsOverlay() {
       destroyed = true;
       ws?.close();
     };
-  }, [username, showChat, showGifts, showFollows]);
+  }, [username, isDemo, processMessage]);
 
   const chatEvents = events.filter((e) => e.type === "chat");
   const alertEvents = events.filter((e) => e.type !== "chat");

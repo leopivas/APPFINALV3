@@ -3,8 +3,9 @@
  * Gift ticker horizontal — faixa na parte inferior com os últimos gifts recebidos.
  * Transparente, sem auth, roda direto no OBS/TikTok Studio.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 interface TickerItem {
   id: string;
@@ -49,6 +50,7 @@ export default function OverlayTicker() {
   const maxItems    = Number(p.get("max") ?? "20");
   const position    = p.get("pos") ?? "bottom"; // bottom | top
   const speed       = Number(p.get("speed") ?? "40"); // px/s
+  const isDemo      = p.get("demo") === "1";
 
   const [items, setItems] = useState<TickerItem[]>([]);
   const counterRef = useRef(0);
@@ -57,8 +59,34 @@ export default function OverlayTicker() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const animRef = useRef<Animation | null>(null);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    if (data.type === "gift") {
+      const d = data as {
+        nickname?: string; giftName?: string;
+        diamondCount?: number; repeatCount?: number; giftType?: number;
+      };
+      if (d.giftType === 1) return;
+      const diamonds = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
+      if (diamonds < minDiamonds) return;
+      const vis = getGiftVisuals(d.giftName ?? "");
+      const id = String(++counterRef.current);
+      setItems((prev) => [
+        ...prev.slice(-(maxItems - 1)),
+        {
+          id, ts: Date.now(),
+          nickname: d.nickname ?? "?",
+          giftName: d.giftName ?? "Gift",
+          emoji: vis.emoji, color: vis.color,
+          diamonds, count: d.repeatCount ?? 1,
+        },
+      ]);
+    }
+  }, [minDiamonds, maxItems]);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 1000 });
+
   useEffect(() => {
-    if (!username) return;
+    if (!username || isDemo) return;
     let destroyed = false;
 
     async function connect() {
@@ -84,28 +112,7 @@ export default function OverlayTicker() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            if (data.type === "gift") {
-              const d = data as {
-                nickname?: string; giftName?: string;
-                diamondCount?: number; repeatCount?: number; giftType?: number;
-              };
-              if (d.giftType === 1) return;
-              const diamonds = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
-              if (diamonds < minDiamonds) return;
-              const vis = getGiftVisuals(d.giftName ?? "");
-              const id = String(++counterRef.current);
-              setItems((prev) => [
-                ...prev.slice(-(maxItems - 1)),
-                {
-                  id, ts: Date.now(),
-                  nickname: d.nickname ?? "?",
-                  giftName: d.giftName ?? "Gift",
-                  emoji: vis.emoji, color: vis.color,
-                  diamonds, count: d.repeatCount ?? 1,
-                },
-              ]);
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch { /* ignore */ }
@@ -118,7 +125,7 @@ export default function OverlayTicker() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [username, minDiamonds, maxItems]);
+  }, [username, isDemo, processMessage]);
 
   useEffect(() => {
     const el = containerRef.current;

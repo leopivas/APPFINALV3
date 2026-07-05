@@ -2,8 +2,9 @@
  * /overlay/stats/:username
  * Live stats bar — viewers, likes, followers, diamonds
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 interface Stats {
   viewers: number;
@@ -29,13 +30,35 @@ export default function OverlayStats() {
   const showF     = p.get("followers") !== "0";
   const showD     = p.get("diamonds")  !== "0";
   const showLive  = p.get("badge")     !== "0";
+  const isDemo    = p.get("demo") === "1";
 
   const [stats, setStats]   = useState<Stats>({ viewers: 0, likes: 0, followers: 0, diamonds: 0 });
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const wsRef               = useRef<WebSocket | null>(null);
   const reconnectRef        = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    if (data.type === "roomUser") {
+      const d = data as { viewerCount?: number; likeCount?: number; totalFollowers?: number };
+      setStats((prev) => ({
+        ...prev,
+        viewers:   d.viewerCount   ?? prev.viewers,
+        likes:     d.likeCount     ?? prev.likes,
+        followers: d.totalFollowers ?? prev.followers,
+      }));
+    }
+    if (data.type === "gift") {
+      const d = data as { diamondCount?: number; repeatCount?: number; giftType?: number };
+      if (d.giftType === 1) return;
+      const earned = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
+      setStats((prev) => ({ ...prev, diamonds: prev.diamonds + earned }));
+    }
+  }, []);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 900 });
+
   useEffect(() => {
+    if (isDemo) { setStatus("live"); return; }
     if (!username) return;
     let destroyed = false;
 
@@ -63,22 +86,7 @@ export default function OverlayStats() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            if (data.type === "roomUser") {
-              const d = data as { viewerCount?: number; likeCount?: number; totalFollowers?: number };
-              setStats((prev) => ({
-                ...prev,
-                viewers:   d.viewerCount   ?? prev.viewers,
-                likes:     d.likeCount     ?? prev.likes,
-                followers: d.totalFollowers ?? prev.followers,
-              }));
-            }
-            if (data.type === "gift") {
-              const d = data as { diamondCount?: number; repeatCount?: number; giftType?: number };
-              if (d.giftType === 1) return;
-              const earned = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
-              setStats((prev) => ({ ...prev, diamonds: prev.diamonds + earned }));
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch {
@@ -88,7 +96,7 @@ export default function OverlayStats() {
 
     void connect();
     return () => { destroyed = true; };
-  }, [username]);
+  }, [username, isDemo, processMessage]);
 
   const items = [
     showV && { icon: "👁",  label: "Viewers",    value: fmt(stats.viewers),   color: "#06b6d4" },

@@ -6,6 +6,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
 
+import { useOverlayDemo } from "@/lib/overlay-demo";
+
 interface SubAlert {
   id: string;
   nickname: string;
@@ -53,6 +55,7 @@ export default function OverlaySubscribe() {
   const p = new URLSearchParams(search);
 
   const position = p.get("pos") ?? "top-right";
+  const isDemo   = p.get("demo") === "1";
 
   const [alerts, setAlerts] = useState<SubAlert[]>([]);
   const counterRef = useRef(0);
@@ -68,8 +71,28 @@ export default function OverlaySubscribe() {
     setAlerts((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    if (data.type === "subscribe") {
+      const d = data as {
+        nickname?: string;
+        subMonth?: number;
+        oldSubscribeStatus?: number;
+        subscribingStatus?: number;
+      };
+      const month = d.subMonth ?? 1;
+      const isNew = (d.oldSubscribeStatus ?? 0) === 0;
+      addAlert({
+        nickname: d.nickname ?? "Alguém",
+        subMonth: month,
+        kind: isNew ? "new" : "renew",
+      });
+    }
+  }, [addAlert]);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 2500 });
+
   useEffect(() => {
-    if (!username) return;
+    if (!username || isDemo) return;
     let destroyed = false;
 
     async function connect() {
@@ -95,22 +118,7 @@ export default function OverlaySubscribe() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            if (data.type === "subscribe") {
-              const d = data as {
-                nickname?: string;
-                subMonth?: number;
-                oldSubscribeStatus?: number;
-                subscribingStatus?: number;
-              };
-              const month = d.subMonth ?? 1;
-              const isNew = (d.oldSubscribeStatus ?? 0) === 0;
-              addAlert({
-                nickname: d.nickname ?? "Alguém",
-                subMonth: month,
-                kind: isNew ? "new" : "renew",
-              });
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch { /* ignore */ }
@@ -123,7 +131,7 @@ export default function OverlaySubscribe() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [username, addAlert]);
+  }, [username, isDemo, processMessage]);
 
   const posClass: Record<string, string> = {
     "top-center":    "top-4 left-1/2 -translate-x-1/2 items-center",

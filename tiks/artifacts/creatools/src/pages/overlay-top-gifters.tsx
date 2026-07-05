@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 interface GifterEntry {
   uniqueId: string;
@@ -33,12 +34,42 @@ export default function OverlayTopGifters() {
   const showDiamonds = params.get("diamonds") !== "0";
   const themeParam  = params.get("theme") ?? "dark";
   const compact     = params.get("compact") === "1";
+  const isDemo      = params.get("demo") === "1";
 
   const [gifters, setGifters] = useState<Map<string, GifterEntry>>(new Map());
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const wsRef = useRef<WebSocket | null>(null);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    if (data.type === "gift") {
+      const d = data as {
+        uniqueId?: string; nickname?: string;
+        diamondCount?: number; repeatCount?: number;
+        giftType?: number; profilePictureUrl?: string;
+      };
+      if (d.giftType === 1) return;
+      const uid = d.uniqueId ?? "?";
+      const nick = d.nickname ?? uid;
+      const diamonds = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
+      setGifters((prev) => {
+        const next = new Map(prev);
+        const ex = next.get(uid);
+        next.set(uid, {
+          uniqueId: uid,
+          nickname: nick,
+          diamonds: (ex?.diamonds ?? 0) + diamonds,
+          gifts: (ex?.gifts ?? 0) + 1,
+          avatarUrl: d.profilePictureUrl ?? ex?.avatarUrl,
+        });
+        return next;
+      });
+    }
+  }, []);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 700 });
+
   useEffect(() => {
+    if (isDemo) { setStatus("live"); return; }
     if (!username) return;
     let destroyed = false;
 
@@ -67,31 +98,7 @@ export default function OverlayTopGifters() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            if (data.type === "gift") {
-              const d = data as {
-                uniqueId?: string; nickname?: string;
-                diamondCount?: number; repeatCount?: number;
-                giftType?: number; profilePictureUrl?: string;
-              };
-              // giftType 1 = streakable (not finalized), skip
-              if (d.giftType === 1) return;
-              const uid = d.uniqueId ?? "?";
-              const nick = d.nickname ?? uid;
-              const diamonds = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
-              setGifters((prev) => {
-                const next = new Map(prev);
-                const ex = next.get(uid);
-                next.set(uid, {
-                  uniqueId: uid,
-                  nickname: nick,
-                  diamonds: (ex?.diamonds ?? 0) + diamonds,
-                  gifts: (ex?.gifts ?? 0) + 1,
-                  avatarUrl: d.profilePictureUrl ?? ex?.avatarUrl,
-                });
-                return next;
-              });
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch {
@@ -104,7 +111,7 @@ export default function OverlayTopGifters() {
       destroyed = true;
       wsRef.current?.close();
     };
-  }, [username]);
+  }, [username, isDemo, processMessage]);
 
   const sorted = Array.from(gifters.values())
     .sort((a, b) => b.diamonds - a.diamonds)

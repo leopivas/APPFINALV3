@@ -2,8 +2,9 @@
  * /overlay/goal/:username
  * Meta de diamonds/viewers com barra de progresso animada
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 function fmt(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -20,13 +21,30 @@ export default function OverlayGoal() {
   const mode      = p.get("mode") ?? "diamonds"; // diamonds | viewers | likes
   const label     = p.get("label") ?? (mode === "diamonds" ? "Meta de Diamonds" : mode === "viewers" ? "Meta de Viewers" : "Meta de Likes");
   const colorPrimary = p.get("color") ?? "#06b6d4";
+  const isDemo       = p.get("demo") === "1";
 
   const [current, setCurrent] = useState(0);
   const [status, setStatus]   = useState<"connecting" | "live" | "error">("connecting");
   const wsRef                 = useRef<WebSocket | null>(null);
   const reconnectRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    if (data.type === "roomUser") {
+      const d = data as { viewerCount?: number; likeCount?: number };
+      if (mode === "viewers") setCurrent(d.viewerCount ?? 0);
+      if (mode === "likes")   setCurrent(d.likeCount   ?? 0);
+    }
+    if (data.type === "gift" && mode === "diamonds") {
+      const d = data as { diamondCount?: number; repeatCount?: number; giftType?: number };
+      if (d.giftType === 1) return;
+      setCurrent((prev) => prev + (d.diamondCount ?? 0) * (d.repeatCount ?? 1));
+    }
+  }, [mode]);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 500 });
+
   useEffect(() => {
+    if (isDemo) { setStatus("live"); return; }
     if (!username) return;
     let destroyed = false;
 
@@ -52,17 +70,7 @@ export default function OverlayGoal() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            if (data.type === "roomUser") {
-              const d = data as { viewerCount?: number; likeCount?: number };
-              if (mode === "viewers") setCurrent(d.viewerCount ?? 0);
-              if (mode === "likes")   setCurrent(d.likeCount   ?? 0);
-            }
-            if (data.type === "gift" && mode === "diamonds") {
-              const d = data as { diamondCount?: number; repeatCount?: number; giftType?: number };
-              if (d.giftType === 1) return;
-              setCurrent((prev) => prev + (d.diamondCount ?? 0) * (d.repeatCount ?? 1));
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch {
@@ -77,7 +85,7 @@ export default function OverlayGoal() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [username, mode]);
+  }, [username, isDemo, processMessage]);
 
   const pct     = Math.min(100, (current / goal) * 100);
   const reached = pct >= 100;

@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
+import { useOverlayDemo } from "@/lib/overlay-demo";
 
 interface AlertItem {
   id: string;
@@ -150,6 +151,7 @@ export default function OverlayAlerts() {
   const showJoins   = params.get("joins")   === "1";
   const position    = params.get("pos") ?? "top-center";
   const minDiamonds = Number(params.get("min") ?? "0");
+  const isDemo      = params.get("demo")    === "1";
 
   const [alerts, setAlerts]       = useState<AlertItem[]>([]);
   const counterRef                = useRef(0);
@@ -167,8 +169,60 @@ export default function OverlayAlerts() {
     setAlerts((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
+  const processMessage = useCallback((data: Record<string, unknown>) => {
+    const type = data.type as string;
+
+    if (type === "gift" && showGifts) {
+      const d = data as {
+        uniqueId?: string; nickname?: string;
+        giftName?: string; diamondCount?: number;
+        repeatCount?: number; giftType?: number;
+      };
+      if (d.giftType === 1) return;
+      const totalDiamonds = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
+      if (totalDiamonds < minDiamonds) return;
+      addAlert({
+        kind: "gift",
+        nickname: d.nickname ?? "?",
+        giftName: d.giftName ?? "Gift",
+        diamonds: totalDiamonds,
+        repeatCount: d.repeatCount ?? 1,
+      });
+    }
+
+    if (type === "social" && showFollows) {
+      const d = data as { nickname?: string; event?: string };
+      if (d.event === "follow") addAlert({ kind: "follow", nickname: d.nickname ?? "?" });
+      if (d.event === "share")  addAlert({ kind: "share",  nickname: d.nickname ?? "?" });
+    }
+
+    if (type === "like" && showLikes) {
+      const d = data as { nickname?: string };
+      likeCountRef.current++;
+      if (likeTimerRef.current) clearTimeout(likeTimerRef.current);
+      likeTimerRef.current = setTimeout(() => {
+        if (likeCountRef.current >= 20) {
+          addAlert({ kind: "like_burst", nickname: d.nickname ?? "?" });
+        }
+        likeCountRef.current = 0;
+      }, 2000);
+    }
+
+    if (type === "subscribe" && showSubs) {
+      const d = data as { nickname?: string; subMonth?: number };
+      addAlert({ kind: "sub", nickname: d.nickname ?? "?", subMonth: d.subMonth ?? 1 });
+    }
+
+    if (type === "join" && showJoins) {
+      const d = data as { nickname?: string };
+      addAlert({ kind: "join", nickname: d.nickname ?? "?" });
+    }
+  }, [showGifts, showFollows, showLikes, showSubs, showJoins, minDiamonds, addAlert]);
+
+  useOverlayDemo(isDemo, processMessage, { interval: 800 });
+
   useEffect(() => {
-    if (!username) return;
+    if (!username || isDemo) return;
     let destroyed = false;
 
     async function connect() {
@@ -193,54 +247,7 @@ export default function OverlayAlerts() {
         ws.onmessage = (msg) => {
           if (destroyed) return;
           try {
-            const data = JSON.parse(msg.data as string) as Record<string, unknown>;
-            const type = data.type as string;
-
-            if (type === "gift" && showGifts) {
-              const d = data as {
-                uniqueId?: string; nickname?: string;
-                giftName?: string; diamondCount?: number;
-                repeatCount?: number; giftType?: number;
-              };
-              if (d.giftType === 1) return; // streakable — skip until finalized
-              const totalDiamonds = (d.diamondCount ?? 0) * (d.repeatCount ?? 1);
-              if (totalDiamonds < minDiamonds) return;
-              addAlert({
-                kind: "gift",
-                nickname: d.nickname ?? "?",
-                giftName: d.giftName ?? "Gift",
-                diamonds: totalDiamonds,
-                repeatCount: d.repeatCount ?? 1,
-              });
-            }
-
-            if (type === "social" && showFollows) {
-              const d = data as { nickname?: string; event?: string };
-              if (d.event === "follow") addAlert({ kind: "follow", nickname: d.nickname ?? "?" });
-              if (d.event === "share")  addAlert({ kind: "share",  nickname: d.nickname ?? "?" });
-            }
-
-            if (type === "like" && showLikes) {
-              const d = data as { nickname?: string };
-              likeCountRef.current++;
-              if (likeTimerRef.current) clearTimeout(likeTimerRef.current);
-              likeTimerRef.current = setTimeout(() => {
-                if (likeCountRef.current >= 20) {
-                  addAlert({ kind: "like_burst", nickname: d.nickname ?? "?" });
-                }
-                likeCountRef.current = 0;
-              }, 2000);
-            }
-
-            if (type === "subscribe" && showSubs) {
-              const d = data as { nickname?: string; subMonth?: number };
-              addAlert({ kind: "sub", nickname: d.nickname ?? "?", subMonth: d.subMonth ?? 1 });
-            }
-
-            if (type === "join" && showJoins) {
-              const d = data as { nickname?: string };
-              addAlert({ kind: "join", nickname: d.nickname ?? "?" });
-            }
+            processMessage(JSON.parse(msg.data as string) as Record<string, unknown>);
           } catch { /* ignore */ }
         };
       } catch { /* ignore */ }
@@ -253,7 +260,7 @@ export default function OverlayAlerts() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [username, showGifts, showFollows, showLikes, minDiamonds, addAlert]);
+  }, [username, isDemo, processMessage]);
 
   const posClass: Record<string, string> = {
     "top-center":    "top-4 left-1/2 -translate-x-1/2 items-center",
