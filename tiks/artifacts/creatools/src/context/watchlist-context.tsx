@@ -5,9 +5,8 @@ import { useToast } from "@/hooks/use-toast";
 
 const STORAGE_KEY = "creatools_watchlist";
 const EVENTS_KEY = "creatools_watch_events";
-// AUTO-POLLING DESABILITADO para preservar quota do tik.tools.
-// Watchlist só atualiza sob demanda (botão "Atualizar" nas páginas).
-const AUTO_POLL_ENABLED = false;
+// Auto-polling só ocorre quando o plano do usuário permitir (autoLiveMonitoring=true).
+// A verificação é feita em runtime consultando /api/auth/me + /api/plans.
 const POLL_INTERVAL_MS = 60_000;
 const MAX_EVENTS = 100;
 
@@ -169,15 +168,38 @@ export function WatchlistProvider({ children }: { children: ReactNode }) {
   creatorsRef.current = creators;
 
   useEffect(() => {
-    if (!AUTO_POLL_ENABLED) return;  // auto-polling disabled to preserve tik.tools quota
+    // Only auto-poll when the current plan has `autoLiveMonitoring=true`
+    // AND the user has linked their own TikTok. Otherwise: manual refresh only.
     let cancelled = false;
-    const run = async () => {
-      if (cancelled) return;
-      await checkAll(creatorsRef.current);
-    };
-    run();
-    const timer = setInterval(run, POLL_INTERVAL_MS);
-    return () => { cancelled = true; clearInterval(timer); };
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    (async () => {
+      try {
+        const token = tokenRef.current;
+        if (!token) return;
+        const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+        // Fetch current user + plan
+        const [meR, plansR] = await Promise.all([
+          fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(`${BASE}/api/plans`),
+        ]);
+        if (!meR.ok || !plansR.ok) return;
+        const me = await meR.json() as { user?: { plan?: string; tiktokUsername?: string } };
+        const plans = (await plansR.json()) as { plans: Array<{ id: string; autoLiveMonitoring?: boolean }> };
+        const myPlan = plans.plans.find((p) => p.id === me.user?.plan);
+        if (!myPlan?.autoLiveMonitoring) return;  // plan doesn't allow auto-polling
+        if (!me.user?.tiktokUsername) return;      // user hasn't linked their own TikTok
+
+        const run = async () => {
+          if (cancelled) return;
+          await checkAll(creatorsRef.current);
+        };
+        run();
+        timer = setInterval(run, POLL_INTERVAL_MS);
+      } catch { /* silent */ }
+    })();
+
+    return () => { cancelled = true; if (timer) clearInterval(timer); };
   }, [checkAll]);
 
   const add = useCallback((username: string) => {

@@ -55,8 +55,9 @@ export default function LiveCounts() {
   const { data, isLoading, refetch, dataUpdatedAt } = useGetLiveCounts({
     query: {
       queryKey: getGetLiveCountsQueryKey(),
-      staleTime: 1000 * 30,
-      refetchInterval: 1000 * 30,
+      staleTime: 1000 * 60 * 10,   // 10 min cache
+      refetchInterval: false,       // manual refresh only (preserves tik.tools quota)
+      refetchOnWindowFocus: false,
     },
   });
 

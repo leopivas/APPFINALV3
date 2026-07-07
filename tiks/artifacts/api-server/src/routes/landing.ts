@@ -158,39 +158,11 @@ async function fetchTikTokProfile(handle: string): Promise<TikToolsProfile> {
 // ── Helper: bulk live check ───────────────────────────────────────────────────
 
 async function bulkLiveCheck(handles: string[]): Promise<Record<string, { isLive: boolean; viewerCount: number }>> {
-  if (!handles.length) return {};
-  try {
-    const apiKey = loadApiKey();
-    const clean = handles.map((h) => h.replace(/^@/, ""));
-    const r = await fetch(`${TIKTOOLS_API}/webcast/bulk_live_check?apiKey=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ unique_ids: clean }),
-    });
-    if (!r.ok) return {};
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const json = (await r.json()) as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results: Record<string, { isLive: boolean; viewerCount: number }> = {};
-    // Shape: { data: { uniqueId: { is_alive, viewer_count } } } or array
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data: any = json?.data ?? json;
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        const uid: string = item?.uniqueId ?? item?.unique_id ?? "";
-        if (uid) results[uid.toLowerCase()] = { isLive: !!(item?.is_alive || item?.isLive), viewerCount: item?.viewer_count ?? item?.viewerCount ?? 0 };
-      }
-    } else if (data && typeof data === "object") {
-      for (const [uid, val] of Object.entries(data)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const v = val as any;
-        results[uid.toLowerCase()] = { isLive: !!(v?.is_alive || v?.isLive), viewerCount: v?.viewer_count ?? v?.viewerCount ?? 0 };
-      }
-    }
-    return results;
-  } catch {
-    return {};
-  }
+  // ⚠️ tik.tools bulk_live_check DISABLED — this endpoint requires Pro tier
+  // and the landing page was hitting it on every visit, burning quota.
+  // Returns empty so the landing page renders without live badges.
+  void handles;
+  return {};
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────

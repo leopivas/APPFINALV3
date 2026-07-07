@@ -795,7 +795,7 @@ export default function Streamers() {
                 )}
               </h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Tracked creators — auto-refreshes every 60s and sends a browser alert when one goes live.
+                Tracked creators — atualização manual (clique em Atualizar). Ative alertas para receber notificação quando alguém ficar ao vivo.
               </p>
             </div>
             <div className="flex gap-2 shrink-0">
@@ -957,7 +957,7 @@ export default function Streamers() {
           )}
 
           <p className="text-xs text-muted-foreground/50 text-center pt-2">
-            Watchlist is stored locally in your browser. Auto-refreshes every 60s while this tab is open.
+            Watchlist salva no navegador · Atualização manual — clique em Atualizar
           </p>
         </div>
       )}

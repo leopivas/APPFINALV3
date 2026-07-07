@@ -137,111 +137,14 @@ router.get("/profile/public/:username", async (req: Request, res: ExpressRespons
   let roomId: string | null = null;
   let viewerCount: number | null = null;
   let likeCount: number | null = null;
-  let topGifters: TopGifter[] = [];
-  let topGifts: TopGift[] = [];
+  const topGifters: TopGifter[] = [];
+  const topGifts: TopGift[] = [];
 
-  if (apiKey) {
-    const [liveRes, giftersRes] = await Promise.allSettled([
-      fetchWithTimeout(
-        `${TIKTOOLS_API}/webcast/live_status?apiKey=${encodeURIComponent(apiKey)}&unique_id=${encodeURIComponent(username)}`
-      ),
-      sections.showTopGifters
-        ? fetchWithTimeout(
-            `${TIKTOOLS_API}/api/gifters/top?apiKey=${encodeURIComponent(apiKey)}&creator=${encodeURIComponent(username)}&limit=5`
-          )
-        : Promise.resolve(null),
-    ]);
-
-    // Parse live status
-    if (liveRes.status === "fulfilled" && liveRes.value?.ok) {
-      try {
-        const d = await liveRes.value.json() as { data?: { is_live?: boolean; room_id?: string } };
-        isLive = d.data?.is_live ?? false;
-        roomId = d.data?.room_id ?? null;
-      } catch { /* ignore */ }
-    }
-
-    // When live: room_info (viewer/like count) + top gifts in parallel
-    if (isLive && roomId) {
-      const [roomRes, fetchRes] = await Promise.allSettled([
-        sections.showLiveStatus
-          ? fetchWithTimeout(`${TIKTOOLS_API}/webcast/room_info?apiKey=${encodeURIComponent(apiKey)}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ room_id: roomId }),
-            })
-          : Promise.resolve(null),
-        sections.showTopGifts
-          ? fetchWithTimeout(`${TIKTOOLS_API}/webcast/fetch?apiKey=${encodeURIComponent(apiKey)}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ unique_id: username }),
-            })
-          : Promise.resolve(null),
-      ]);
-
-      // Room info
-      if (roomRes.status === "fulfilled" && roomRes.value?.ok) {
-        try {
-          const d = await roomRes.value.json() as { data?: { user_count?: number; like_count?: number } };
-          viewerCount = d.data?.user_count ?? null;
-          likeCount = d.data?.like_count ?? null;
-        } catch { /* ignore */ }
-      }
-
-      // Top gifts (aggregate gift events from current session)
-      if (fetchRes.status === "fulfilled" && fetchRes.value?.ok) {
-        try {
-          const d = await fetchRes.value.json() as {
-            data?: {
-              events?: Array<{
-                event_type?: string;
-                type?: string;
-                data?: {
-                  gift_name?: string; giftName?: string;
-                  repeat_count?: number; repeatCount?: number;
-                  diamond_count?: number; diamondCount?: number;
-                };
-              }>;
-            };
-          };
-          const giftMap = new Map<string, { count: number; diamonds: number }>();
-          for (const ev of d.data?.events ?? []) {
-            if (ev.event_type !== "gift" && ev.type !== "gift") continue;
-            const name = ev.data?.gift_name ?? ev.data?.giftName ?? "";
-            if (!name) continue;
-            const reps = ev.data?.repeat_count ?? ev.data?.repeatCount ?? 1;
-            const diamonds = ev.data?.diamond_count ?? ev.data?.diamondCount ?? 0;
-            const existing = giftMap.get(name) ?? { count: 0, diamonds: 0 };
-            giftMap.set(name, { count: existing.count + reps, diamonds: existing.diamonds + diamonds * reps });
-          }
-          topGifts = Array.from(giftMap.entries())
-            .map(([giftName, v]) => ({ giftName, count: v.count, diamondValue: v.diamonds }))
-            .sort((a, b) => b.diamondValue - a.diamondValue)
-            .slice(0, 5);
-        } catch { /* ignore */ }
-      }
-    }
-
-    // Parse top gifters
-    if (giftersRes.status === "fulfilled" && giftersRes.value?.ok) {
-      try {
-        const d = await giftersRes.value.json() as {
-          data?: Array<{
-            username?: string; nickname?: string;
-            avatar_thumb?: { url_list?: string[] };
-            diamond_count?: number;
-          }>;
-        };
-        topGifters = (d.data ?? []).slice(0, 5).map((g) => ({
-          username: g.username ?? "",
-          displayName: g.nickname ?? g.username ?? "",
-          avatar: g.avatar_thumb?.url_list?.[0] ?? null,
-          diamondCount: g.diamond_count ?? 0,
-        }));
-      } catch { /* ignore */ }
-    }
-  }
+  // ⚠️ tik.tools chamadas AGGRESSIVE-DISABLED to preserve quota.
+  // Auto-fetch of live status / top gifters / top gifts REMOVED from public profile page.
+  // The user can trigger a refresh via a dedicated endpoint if needed.
+  // Keep apiKey/sections referenced to avoid unused-var lint noise.
+  void apiKey; void sections;
 
   res.json({
     username: user.tiktokUsername,

@@ -37,6 +37,7 @@ router.patch("/admin/plans/:id", requireAdminMiddleware, async (req, res): Promi
   if (body.tiktokUsernameChangesPerWeek !== undefined) updates.tiktokUsernameChangesPerWeek = Number(body.tiktokUsernameChangesPerWeek);
   if (body.maxConcurrentWs !== undefined) updates.maxConcurrentWs = Number(body.maxConcurrentWs);
   if (body.maxApiCallsPerWindow !== undefined) updates.maxApiCallsPerWindow = Number(body.maxApiCallsPerWindow);
+  if (body.autoLiveMonitoring !== undefined) updates.autoLiveMonitoring = !!body.autoLiveMonitoring;
   if (body.maxLiveHoursPerMonth !== undefined) updates.maxLiveHoursPerMonth = Number(body.maxLiveHoursPerMonth);
   if (body.maxLiveHoursPerDay !== undefined) updates.maxLiveHoursPerDay = Number(body.maxLiveHoursPerDay);
   if (body.maxLiveAnalyses !== undefined) updates.maxLiveAnalyses = Number(body.maxLiveAnalyses);
@@ -75,6 +76,7 @@ router.post("/admin/plans", requireAdminMiddleware, async (req, res): Promise<vo
     tiktokUsernameChangesPerWeek: Number(body.tiktokUsernameChangesPerWeek ?? 1),
     maxConcurrentWs: Number(body.maxConcurrentWs ?? 1),
     maxApiCallsPerWindow: Number(body.maxApiCallsPerWindow ?? 50),
+    autoLiveMonitoring: !!body.autoLiveMonitoring,
     maxLiveHoursPerMonth: Number(body.maxLiveHoursPerMonth ?? 10),
     maxLiveHoursPerDay: Number(body.maxLiveHoursPerDay ?? 4),
     maxLiveAnalyses: Number(body.maxLiveAnalyses ?? 50),

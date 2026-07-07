@@ -679,16 +679,37 @@ export default function Monitor() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // AUTO-CONNECT DESABILITADO para preservar quota do tik.tools.
-  // Usuário precisa clicar em "Conectar" no botão manualmente.
-  // Antes: qualquer visita a /monitor/:username disparava mintJwt + roomInfo automaticamente.
+  // AUTO-CONNECT SÓ SE:
+  //   1) O username na URL for igual ao TikTok vinculado do usuário logado, E
+  //   2) O plano do usuário tenha `autoLiveMonitoring=true`.
+  // Caso contrário, exige clique manual em "Conectar" (preserva quota tik.tools).
   useEffect(() => {
-    if (activeUsername) {
-      setEvents([]); setTotalDiamonds(0); setTotalLikes(0);
-      setTopGifters([]); setViewerCount(null);
-      setConnStatus("idle");
-    }
-    return () => { disconnect(); };
+    if (!activeUsername) return;
+    setEvents([]); setTotalDiamonds(0); setTotalLikes(0);
+    setTopGifters([]); setViewerCount(null);
+    setConnStatus("idle");
+
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!authToken) return;
+        const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+        const [meR, plansR] = await Promise.all([
+          fetch(`${BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }),
+          fetch(`${BASE}/api/plans`),
+        ]);
+        if (cancelled || !meR.ok || !plansR.ok) return;
+        const me = await meR.json() as { user?: { plan?: string; tiktokUsername?: string } };
+        const plans = (await plansR.json()) as { plans: Array<{ id: string; autoLiveMonitoring?: boolean }> };
+        const myPlan = plans.plans.find((p) => p.id === me.user?.plan);
+        const isOwnHandle = me.user?.tiktokUsername?.toLowerCase() === activeUsername.toLowerCase();
+        if (isOwnHandle && myPlan?.autoLiveMonitoring) {
+          startConnection(activeUsername);
+        }
+      } catch { /* silent */ }
+    })();
+
+    return () => { cancelled = true; disconnect(); };
   }, [activeUsername]);
 
   const handleMonitor = (e: React.FormEvent) => {

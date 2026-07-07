@@ -1004,22 +1004,14 @@ router.get("/tiktok/gifters/leaderboard", requireAuth, async (req, res): Promise
 
 // ── Top Gifters for a Creator ─────────────────────────────────────────────────
 router.get("/tiktok/gifters/top", requireAuth, async (req, res): Promise<void> => {
-  const { creator, limit } = req.query as { creator?: string; limit?: string };
+  const { creator } = req.query as { creator?: string; limit?: string };
   if (!creator) {
     res.status(400).json({ error: "creator query param required" });
     return;
   }
-  try {
-    const apiKey = getApiKey();
-    const params = new URLSearchParams({ apiKey, creator });
-    if (limit) params.set("limit", limit);
-    const r = await fetch(`${TIKTOOLS_API}/api/gifters/top?${params}`);
-    const json = await r.json();
-    res.json(json);
-  } catch (err) {
-    req.log.error({ err }, "Failed to fetch top gifters");
-    res.status(500).json({ error: "Failed to fetch top gifters" });
-  }
+  // ⚠️ tik.tools /api/gifters/top returns 404 (endpoint removed upstream).
+  // Return empty gracefully to avoid burning quota on retries.
+  res.json({ data: [], reason: "endpoint_deprecated" });
 });
 
 // ── Gifter Profile ────────────────────────────────────────────────────────────

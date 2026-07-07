@@ -51,7 +51,9 @@ export default function StreamerWatchlist() {
   const [refreshing, setRefreshing] = useState(false);
 
   const prevStatusRef = useRef<Record<string, "live" | "offline" | "unknown">>({});
+  // Declared for cleanup compat only — no auto-refresh (feito manualmente).
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  void pollTimerRef;
 
   const bulkCheck = useBulkLiveCheck();
 
@@ -135,7 +137,7 @@ export default function StreamerWatchlist() {
             )}
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Tracked streamers — auto-refreshes every 60s. Enable alerts to get a browser notification when one goes live.
+            Tracked streamers — atualização manual (clique em Atualizar). Ative os alertas para receber notificação quando alguém ficar ao vivo.
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
@@ -252,7 +254,7 @@ export default function StreamerWatchlist() {
       )}
 
       <p className="text-xs text-muted-foreground/40 text-center">
-        Watchlist stored in your browser · Auto-refreshes every 60s while page is open
+        Watchlist salva no navegador · Atualização manual — clique em Atualizar
       </p>
     </div>
   );

@@ -71,6 +71,7 @@ import MinigamesBau from "./pages/minigames-bau";
 import ServersPage from "./pages/servers";
 import AiAssistant from "./pages/ai-assistant";
 import AiVideos from "./pages/ai-videos";
+import OverlayScoreboard from "./pages/overlay-scoreboard";
 import AppLayout from "./components/layout/app-layout";
 import { AuthProvider, useAuth } from "./context/auth-context";
 import { UIConfigProvider } from "./context/ui-config-context";
@@ -155,6 +156,7 @@ function Router() {
       <Route path="/overlay/subscribe/:username" component={OverlaySubscribe} />
       <Route path="/overlay/chat/:username" component={OverlayChat} />
       <Route path="/overlay/ticker/:username" component={OverlayTicker} />
+      <Route path="/overlay/scoreboard/:username" component={OverlayScoreboard} />
       <Route path="/overlay/:username" component={ObsOverlay} />
       <Route>
         <AppLayout>

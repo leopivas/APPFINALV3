@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,10 +6,21 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/auth-context";
 import {
   Trophy, Wifi, WifiOff, RotateCcw, Play, Square,
   Gift, Heart, UserPlus, MessageSquare, Share2, Flame,
+  Copy, ExternalLink, Palette, Save,
 } from "lucide-react";
+
+const THEMES = [
+  { id: "neon",    label: "Neon (roxo/rosa)", accent: "#a78bfa" },
+  { id: "gold",    label: "Gold (dourado)",   accent: "#fbbf24" },
+  { id: "dark",    label: "Dark (minimal)",   accent: "#22d3ee" },
+  { id: "minimal", label: "Transparent",       accent: "#ec4899" },
+];
 
 interface ScoreEntry {
   uniqueId: string;
@@ -57,10 +68,34 @@ export default function Scoreboards() {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [scores, setScores] = useState<Map<string, ScoreEntry>>(new Map());
-  const [rules, setRules] = useState<ScoringRules>(DEFAULT_RULES);
+  const [rules, setRules] = useState<ScoringRules>(() => {
+    try { return JSON.parse(localStorage.getItem("creatools_score_rules") || "null") || DEFAULT_RULES; }
+    catch { return DEFAULT_RULES; }
+  });
+  const [theme, setTheme] = useState<string>(() => localStorage.getItem("creatools_score_theme") || "neon");
+  const [overlayTitle, setOverlayTitle] = useState<string>(() => localStorage.getItem("creatools_score_title") || "🏆 Top Fãs");
+  const [topN, setTopN] = useState<number>(() => Number(localStorage.getItem("creatools_score_topn") || 10));
   const wsRef = useRef<WebSocket | null>(null);
   const rulesRef = useRef(rules);
   rulesRef.current = rules;
+  const { toast } = useToast();
+  const { user } = useAuth();
+
+  // Persist settings
+  useEffect(() => { localStorage.setItem("creatools_score_rules", JSON.stringify(rules)); }, [rules]);
+  useEffect(() => { localStorage.setItem("creatools_score_theme", theme); }, [theme]);
+  useEffect(() => { localStorage.setItem("creatools_score_title", overlayTitle); }, [overlayTitle]);
+  useEffect(() => { localStorage.setItem("creatools_score_topn", String(topN)); }, [topN]);
+
+  // Public overlay URL (for OBS)
+  const overlayUrl = useMemo(() => {
+    if (!username) return "";
+    const base = window.location.origin;
+    const q = new URLSearchParams({ theme, top: String(topN), title: overlayTitle });
+    return `${base}/overlay/scoreboard/${encodeURIComponent(username)}?${q.toString()}`;
+  }, [username, theme, topN, overlayTitle]);
+  const overlayUrlV = overlayUrl ? `${overlayUrl}&layout=vertical` : "";
+  const overlayUrlH = overlayUrl ? `${overlayUrl}&layout=horizontal` : "";
 
   const sorted = Array.from(scores.values()).sort((a, b) => b.points - a.points);
   const totalPoints = sorted.reduce((s, e) => s + e.points, 0);
