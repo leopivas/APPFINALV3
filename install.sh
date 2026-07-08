@@ -208,25 +208,47 @@ ENV
 
 ok "Arquivos .env gerados"
 
-# Supervisor config
+# ─── Detecta caminhos reais dos binários (evita "spawn error" do supervisor) ─
+UVICORN_BIN="/root/.venv-creatools/bin/uvicorn"
+YARN_BIN="$(command -v yarn 2>/dev/null || true)"
+NPM_PREFIX="$(npm config get prefix 2>/dev/null || echo /usr/local)"
+
+# Fallbacks caso `command -v` não pegue (ex: PATH incompleto)
+if [[ -z "$YARN_BIN" ]]; then
+  for candidate in "$NPM_PREFIX/bin/yarn" /usr/local/bin/yarn /usr/bin/yarn /root/.nvm/versions/node/*/bin/yarn; do
+    if [[ -x "$candidate" ]]; then YARN_BIN="$candidate"; break; fi
+  done
+fi
+
+[[ -x "$UVICORN_BIN" ]] || fatal "uvicorn não encontrado em $UVICORN_BIN — verifique se pip install correu bem"
+[[ -n "$YARN_BIN" && -x "$YARN_BIN" ]] || fatal "yarn não encontrado no sistema"
+
+log "uvicorn: $UVICORN_BIN"
+log "yarn:    $YARN_BIN"
+
+# Supervisor config (usa paths reais detectados acima)
 cat > /etc/supervisor/conf.d/creatools.conf <<SUP
 [program:creatools-backend]
-command=/root/.venv-creatools/bin/uvicorn server:app --host 0.0.0.0 --port ${BACKEND_PORT} --workers 1
+command=${UVICORN_BIN} server:app --host 0.0.0.0 --port ${BACKEND_PORT} --workers 1
 directory=${APP_DIR}/backend
-environment=PATH="/root/.venv-creatools/bin:%(ENV_PATH)s"
+environment=PATH="/root/.venv-creatools/bin:/usr/local/bin:/usr/bin:/bin",PYTHONUNBUFFERED="1"
 autostart=true
 autorestart=true
+startsecs=5
+startretries=3
 stopasgroup=true
 killasgroup=true
 stderr_logfile=/var/log/creatools-backend.err.log
 stdout_logfile=/var/log/creatools-backend.out.log
 
 [program:creatools-frontend]
-command=/usr/bin/yarn start
+command=${YARN_BIN} start
 directory=${APP_DIR}/frontend
-environment=HOST="0.0.0.0",PORT="${FRONTEND_PORT}",PATH="/usr/bin:%(ENV_PATH)s"
+environment=HOST="0.0.0.0",PORT="${FRONTEND_PORT}",PATH="${NPM_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin",HOME="/root",NODE_ENV="production"
 autostart=true
 autorestart=true
+startsecs=10
+startretries=3
 stopasgroup=true
 killasgroup=true
 stderr_logfile=/var/log/creatools-frontend.err.log
@@ -269,7 +291,27 @@ nginx -t >/dev/null 2>&1 && systemctl reload nginx || warn "nginx: check config"
 supervisorctl reread >/dev/null 2>&1
 supervisorctl update >/dev/null 2>&1
 supervisorctl restart creatools-backend creatools-frontend 2>&1 | tail -3 || true
-sleep 5
+sleep 8
+
+# Verifica se subiu de fato e mostra diagnóstico se falhou
+BACKEND_STATE="$(supervisorctl status creatools-backend 2>/dev/null | awk '{print $2}' || echo UNKNOWN)"
+FRONTEND_STATE="$(supervisorctl status creatools-frontend 2>/dev/null | awk '{print $2}' || echo UNKNOWN)"
+
+if [[ "$BACKEND_STATE" != "RUNNING" || "$FRONTEND_STATE" != "RUNNING" ]]; then
+  warn "Um ou mais serviços não estão RUNNING:"
+  echo "    backend:  $BACKEND_STATE"
+  echo "    frontend: $FRONTEND_STATE"
+  echo ""
+  echo "─── ÚLTIMAS LINHAS DOS LOGS (para diagnóstico) ───"
+  echo ""
+  echo "▼ /var/log/creatools-backend.err.log"
+  tail -n 15 /var/log/creatools-backend.err.log 2>/dev/null || echo "(vazio ou inexistente)"
+  echo ""
+  echo "▼ /var/log/creatools-frontend.err.log"
+  tail -n 15 /var/log/creatools-frontend.err.log 2>/dev/null || echo "(vazio ou inexistente)"
+  echo ""
+  echo "Reinicie manualmente após corrigir com: sudo supervisorctl restart creatools-backend creatools-frontend"
+fi
 
 # ─── Resumo final ──────────────────────────────────────────────────────────
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
