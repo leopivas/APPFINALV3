@@ -140,6 +140,8 @@ function Router() {
     <Switch>
       <Route path="/login" component={() => <GuestRoute component={Login} />} />
       <Route path="/setup" component={Setup} />
+      <Route path="/installer" component={Setup} />
+      <Route path="/install" component={Setup} />
       {/* Public landing page — handles auth check internally */}
       <Route path="/" component={HomeRoute} />
       {/* /landing — admin preview route (accessible while logged in, bypasses enabled check) */}

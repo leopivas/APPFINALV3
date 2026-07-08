@@ -19,14 +19,19 @@ interface SetupStatus {
   hasUsers: boolean;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  installedLocked?: boolean;
+  hasDatabaseUrl?: boolean;
+  hasLlmKey?: boolean;
 }
 
-type StepId = "welcome" | "account" | "tiktools" | "altapi" | "stripe" | "done";
+type StepId = "welcome" | "database" | "account" | "tiktools" | "ai" | "altapi" | "stripe" | "done";
 
 const STEPS: { id: StepId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "welcome",  label: "Boas-vindas",    icon: Zap },
+  { id: "database", label: "Banco de Dados", icon: Server },
   { id: "account",  label: "Conta Admin",    icon: Shield },
   { id: "tiktools", label: "API TikTok",     icon: Key },
+  { id: "ai",       label: "IA (opcional)",  icon: Zap },
   { id: "altapi",   label: "API Alternativa",icon: Server },
   { id: "stripe",   label: "Pagamentos",     icon: CreditCard },
   { id: "done",     label: "Concluído",      icon: CheckCheck },
@@ -50,6 +55,21 @@ export default function Setup() {
   const [tiktoolsKey, setTiktoolsKey] = useState("");
   const [apiTesting, setApiTesting] = useState(false);
   const [apiTestResult, setApiTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Database (PostgreSQL)
+  const [dbHost, setDbHost] = useState("localhost");
+  const [dbPort, setDbPort] = useState("5432");
+  const [dbUser, setDbUser] = useState("creatools");
+  const [dbPassword, setDbPassword] = useState("");
+  const [dbName, setDbName] = useState("creatools");
+  const [dbUrlOverride, setDbUrlOverride] = useState("");
+  const [dbTesting, setDbTesting] = useState(false);
+  const [dbTestResult, setDbTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // AI (Emergent LLM Key)
+  const [llmKey, setLlmKey] = useState("");
+  const [llmTesting, setLlmTesting] = useState(false);
+  const [llmTestResult, setLlmTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   // Alt API
   const [altEnabled, setAltEnabled] = useState(false);
@@ -106,6 +126,42 @@ export default function Setup() {
     } finally { setApiTesting(false); }
   }
 
+  async function testDatabase() {
+    setDbTesting(true);
+    setDbTestResult(null);
+    try {
+      const body = dbUrlOverride.trim()
+        ? { url: dbUrlOverride.trim() }
+        : { host: dbHost, port: dbPort, user: dbUser, password: dbPassword, database: dbName };
+      const r = await fetch(`${BASE}/api/setup/test-db`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json() as { ok: boolean; message: string };
+      setDbTestResult(d);
+    } catch (err) {
+      setDbTestResult({ ok: false, message: err instanceof Error ? err.message : "Erro de conexão" });
+    } finally { setDbTesting(false); }
+  }
+
+  async function testLlm() {
+    if (!llmKey.trim()) return;
+    setLlmTesting(true);
+    setLlmTestResult(null);
+    try {
+      const r = await fetch(`${BASE}/api/setup/test-llm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: llmKey }),
+      });
+      const d = await r.json() as { ok: boolean; message: string };
+      setLlmTestResult(d);
+    } catch {
+      setLlmTestResult({ ok: false, message: "Erro de conexão" });
+    } finally { setLlmTesting(false); }
+  }
+
   async function testAltApi() {
     if (!altBaseUrl.trim()) return;
     setAltTesting(true);
@@ -127,6 +183,11 @@ export default function Setup() {
     setSubmitting(true);
     setError(null);
     try {
+      const dbUrl = dbUrlOverride.trim()
+        || (dbHost && dbUser && dbName
+          ? `postgres://${encodeURIComponent(dbUser)}:${encodeURIComponent(dbPassword)}@${dbHost}:${dbPort || 5432}/${dbName}`
+          : undefined);
+
       const r = await fetch(`${BASE}/api/setup/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -135,6 +196,8 @@ export default function Setup() {
           adminEmail: adminEmail || undefined,
           adminPassword: adminPassword || undefined,
           tiktoolsApiKey: tiktoolsKey,
+          databaseUrl: dbUrl,
+          emergentLlmKey: llmKey.trim() || undefined,
           stripePublishableKey: stripeEnabled ? stripePublishable : undefined,
           stripeSecretKey: stripeEnabled ? stripeSecret : undefined,
           stripeWebhookSecret: stripeEnabled ? stripeWebhook : undefined,
@@ -159,9 +222,11 @@ export default function Setup() {
 
   function goNext() {
     const nextSteps: Record<StepId, StepId | null> = {
-      welcome: status?.hasUsers ? "tiktools" : "account",
+      welcome: "database",
+      database: status?.hasUsers ? "tiktools" : "account",
       account: "tiktools",
-      tiktools: "altapi",
+      tiktools: "ai",
+      ai: "altapi",
       altapi: "stripe",
       stripe: "done",
       done: null,
@@ -174,9 +239,11 @@ export default function Setup() {
   function goBack() {
     const prevSteps: Record<StepId, StepId | null> = {
       welcome: null,
-      account: "welcome",
-      tiktools: status?.hasUsers ? null : "account",
-      altapi: "tiktools",
+      database: "welcome",
+      account: "database",
+      tiktools: status?.hasUsers ? "database" : "account",
+      ai: "tiktools",
+      altapi: "ai",
       stripe: "altapi",
       done: null,
     };
@@ -186,8 +253,10 @@ export default function Setup() {
 
   function canProceed(): boolean {
     if (step === "welcome") return true;
+    if (step === "database") return true; // DB é opcional (pode configurar depois via .env)
     if (step === "account") return !!adminName.trim() && !!adminEmail.trim() && adminPassword.length >= 6;
     if (step === "tiktools") return !!tiktoolsKey.trim();
+    if (step === "ai") return true;
     if (step === "altapi") return true;
     if (step === "stripe") return true;
     return true;
@@ -270,6 +339,7 @@ export default function Setup() {
         <div className="space-y-2">
           {STEPS.filter((s) => {
             if (s.id === "account" && status?.hasUsers) return false;
+            if (s.id === "database" && status?.hasDatabaseUrl && status?.hasUsers) return false;
             return true;
           }).map((s, i) => {
             const sIdx = STEPS.findIndex((x) => x.id === s.id);
@@ -356,6 +426,93 @@ export default function Setup() {
                     <a href="https://tik.tools" target="_blank" rel="noopener noreferrer" className="underline text-cyan-400">tik.tools</a>.
                   </span>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── DATABASE ── */}
+          {step === "database" && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: "rgba(34,197,94,0.15)" }}>
+                  <Server className="w-6 h-6 text-green-400" />
+                </div>
+                <Badge className="text-xs" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                  PostgreSQL
+                </Badge>
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-1">Banco de Dados</h2>
+              <p className="text-purple-300/50 text-sm mb-6">
+                Configure a conexão com o PostgreSQL. Você pode pular se já tem <code className="text-cyan-300">DATABASE_URL</code> no ambiente.
+              </p>
+
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-white/50 mb-1.5 block">Host</Label>
+                    <input value={dbHost} onChange={(e) => { setDbHost(e.target.value); setDbTestResult(null); }} placeholder="localhost"
+                      className="w-full px-3 py-2.5 rounded-xl text-sm outline-none font-mono"
+                      style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "white" }} />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-white/50 mb-1.5 block">Porta</Label>
+                    <input value={dbPort} onChange={(e) => { setDbPort(e.target.value); setDbTestResult(null); }} placeholder="5432"
+                      className="w-full px-3 py-2.5 rounded-xl text-sm outline-none font-mono"
+                      style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "white" }} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-white/50 mb-1.5 block">Usuário</Label>
+                    <input value={dbUser} onChange={(e) => { setDbUser(e.target.value); setDbTestResult(null); }} placeholder="creatools"
+                      className="w-full px-3 py-2.5 rounded-xl text-sm outline-none font-mono"
+                      style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "white" }} />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-white/50 mb-1.5 block">Senha</Label>
+                    <input type="password" value={dbPassword} onChange={(e) => { setDbPassword(e.target.value); setDbTestResult(null); }} placeholder="••••••"
+                      className="w-full px-3 py-2.5 rounded-xl text-sm outline-none font-mono"
+                      style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "white" }} />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50 mb-1.5 block">Nome do banco</Label>
+                  <input value={dbName} onChange={(e) => { setDbName(e.target.value); setDbTestResult(null); }} placeholder="creatools"
+                    className="w-full px-3 py-2.5 rounded-xl text-sm outline-none font-mono"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "white" }} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50 mb-1.5 block">Ou URL de conexão completa (opcional)</Label>
+                  <input value={dbUrlOverride} onChange={(e) => { setDbUrlOverride(e.target.value); setDbTestResult(null); }} placeholder="postgres://user:pass@host:5432/dbname"
+                    className="w-full px-3 py-2.5 rounded-xl text-sm outline-none font-mono placeholder:text-purple-400/20"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "white" }} />
+                </div>
+
+                <button onClick={testDatabase} disabled={dbTesting}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium disabled:opacity-40"
+                  style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#4ade80" }}>
+                  {dbTesting ? <><Loader2 className="w-4 h-4 animate-spin" />Testando…</> : <><RefreshCw className="w-4 h-4" />Testar conexão</>}
+                </button>
+
+                {dbTestResult && (
+                  <div className="flex items-start gap-2 text-sm rounded-xl px-4 py-3"
+                    style={{
+                      background: dbTestResult.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                      border: `1px solid ${dbTestResult.ok ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+                      color: dbTestResult.ok ? "#86efac" : "#fca5a5",
+                    }}>
+                    {dbTestResult.ok ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+                    {dbTestResult.message}
+                  </div>
+                )}
+
+                {status?.hasDatabaseUrl && (
+                  <div className="flex items-center gap-2 text-xs rounded-xl px-3 py-2"
+                    style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#fcd34d" }}>
+                    <Info className="w-3.5 h-3.5 shrink-0" />
+                    DATABASE_URL já configurado no ambiente — pode pular esta etapa
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -463,6 +620,73 @@ export default function Setup() {
                     {["Limites por plano (sandbox: 20 calls/janela)", "3 WebSockets simultâneos por usuário (tier gratuito)", "Sessões WS de até 10 minutos"].map((t) => (
                       <p key={t} className="text-xs text-white/30 flex items-center gap-1.5">
                         <Circle className="w-2 h-2 text-purple-400/40 shrink-0" />{t}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── AI (Emergent LLM Key) ── */}
+          {step === "ai" && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: "rgba(236,72,153,0.15)" }}>
+                  <Zap className="w-6 h-6 text-pink-400" />
+                </div>
+                <Badge className="text-xs" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                  Opcional
+                </Badge>
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-1">Recursos de IA</h2>
+              <p className="text-purple-300/50 text-sm mb-6">
+                Configure a <strong className="text-pink-300">Emergent LLM Key</strong> para habilitar Claude Sonnet 4.5 (chat) e Sora 2 (vídeo). Pode configurar depois.
+              </p>
+
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <Label className="text-xs text-white/50">EMERGENT_LLM_KEY</Label>
+                    <span className="text-xs text-pink-400/60">Obter em: Perfil → Universal Key</span>
+                  </div>
+                  <input value={llmKey} onChange={(e) => { setLlmKey(e.target.value); setLlmTestResult(null); }} placeholder="sk-emergent-••••••••••••••••"
+                    className="w-full px-4 py-3 rounded-xl text-sm outline-none font-mono placeholder:text-purple-400/30"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", color: "white" }} />
+                </div>
+
+                <button onClick={testLlm} disabled={!llmKey.trim() || llmTesting}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium disabled:opacity-40"
+                  style={{ background: "rgba(236,72,153,0.1)", border: "1px solid rgba(236,72,153,0.2)", color: "#f472b6" }}>
+                  {llmTesting ? <><Loader2 className="w-4 h-4 animate-spin" />Validando…</> : <><RefreshCw className="w-4 h-4" />Validar chave</>}
+                </button>
+
+                {llmTestResult && (
+                  <div className="flex items-start gap-2 text-sm rounded-xl px-4 py-3"
+                    style={{
+                      background: llmTestResult.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                      border: `1px solid ${llmTestResult.ok ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+                      color: llmTestResult.ok ? "#86efac" : "#fca5a5",
+                    }}>
+                    {llmTestResult.ok ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+                    {llmTestResult.message}
+                  </div>
+                )}
+
+                {status?.hasLlmKey && !llmKey && (
+                  <div className="flex items-center gap-2 text-xs rounded-xl px-3 py-2"
+                    style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#fcd34d" }}>
+                    <Info className="w-3.5 h-3.5 shrink-0" />
+                    EMERGENT_LLM_KEY já configurado — deixe em branco para manter
+                  </div>
+                )}
+
+                <div className="rounded-xl p-4" style={{ background: "rgba(236,72,153,0.05)", border: "1px solid rgba(236,72,153,0.12)" }}>
+                  <p className="text-xs text-white/40 mb-2 font-semibold uppercase tracking-wide">Recursos habilitados por esta chave:</p>
+                  <div className="space-y-1">
+                    {["Chat com Claude Sonnet 4.5 (assistente IA)", "Geração de vídeos com Sora 2", "Object Storage integrado (upload de mídia)"].map((t) => (
+                      <p key={t} className="text-xs text-white/40 flex items-center gap-1.5">
+                        <Circle className="w-2 h-2 text-pink-400/40 shrink-0" />{t}
                       </p>
                     ))}
                   </div>
