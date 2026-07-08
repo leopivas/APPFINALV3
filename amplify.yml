@@ -1,0 +1,74 @@
+# ============================================================================
+#  AWS Amplify Build Configuration
+#  --------------------------------------------------------------------------
+#  Este arquivo diz ao Amplify como construir APENAS o frontend React
+#  (creatools) dentro do monorepo pnpm.
+#
+#  Configuração no Amplify Console:
+#    • Repository: leopivas/APPFINALV3
+#    • Branch: main
+#    • App root directory: .  (raiz do repositório — deixe em branco)
+#    • Build settings: usa este arquivo (amplify.yml)
+#
+#  Variáveis de ambiente (configurar no Amplify Console → Environment variables):
+#    REACT_APP_BACKEND_URL = https://seu-backend.exemplo.com
+#      (URL do backend rodando em EC2/App Runner — SEM barra no final)
+#
+#  Para deploy do BACKEND, use:
+#    - EC2 com install.sh (recomendado, mais simples)
+#    - Ou App Runner via Dockerfile (mais complexo)
+# ============================================================================
+version: 1
+applications:
+  - appRoot: .
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            # 1. Instala pnpm 9 (versão compatível com Node 20)
+            - npm install -g pnpm@9.15.9
+
+            # 2. Instala todas as dependências do workspace (usa cache do Amplify)
+            - cd tiks && pnpm install --frozen-lockfile
+
+        build:
+          commands:
+            # 3. Verifica que REACT_APP_BACKEND_URL foi configurada
+            - |
+              if [ -z "$REACT_APP_BACKEND_URL" ]; then
+                echo "ERRO: variável REACT_APP_BACKEND_URL não definida no Amplify Console."
+                echo "Vá em App settings → Environment variables e adicione a URL do backend."
+                exit 1
+              fi
+
+            # 4. Injeta a URL do backend como VITE_ para o Vite pegar em build
+            - cd tiks/artifacts/creatools && echo "VITE_BACKEND_URL=$REACT_APP_BACKEND_URL" > .env.production
+
+            # 5. Build de produção (Vite gera pasta dist/)
+            - cd tiks/artifacts/creatools && pnpm run build
+
+      artifacts:
+        # Pasta onde ficam os arquivos estáticos gerados pelo Vite
+        baseDirectory: tiks/artifacts/creatools/dist
+        files:
+          - '**/*'
+
+      cache:
+        # Cache para acelerar builds subsequentes
+        paths:
+          - tiks/node_modules/**/*
+          - tiks/artifacts/creatools/node_modules/**/*
+          - tiks/artifacts/api-server/node_modules/**/*
+          - tiks/lib/**/node_modules/**/*
+          - ~/.pnpm-store/**/*
+
+    customHeaders:
+      # SPA routing — todas as rotas caem no index.html
+      - pattern: '**/*'
+        headers:
+          - key: 'Strict-Transport-Security'
+            value: 'max-age=31536000; includeSubDomains'
+          - key: 'X-Content-Type-Options'
+            value: 'nosniff'
+          - key: 'X-Frame-Options'
+            value: 'SAMEORIGIN'
